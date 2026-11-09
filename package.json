@@ -1,0 +1,34 @@
+{
+  "name": "leaflet-gl-vectortiles",
+  "version": "0.1.0",
+  "description": "Leaflet layer for Mapbox Vector Tiles with GL styles: classic WebMercator vector tiles (basemap.at, OpenMapTiles, ESRI) and vector tiles in any projection and grid (gView GIS). One file, no dependencies, rendering in a web worker.",
+  "main": "leaflet-gl-vectortiles.js",
+  "files": [
+    "leaflet-gl-vectortiles.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "leaflet",
+    "leaflet-plugin",
+    "vector-tiles",
+    "mvt",
+    "mapbox-vector-tiles",
+    "gl-style",
+    "maplibre-style",
+    "proj4leaflet",
+    "gview"
+  ],
+  "peerDependencies": {
+    "leaflet": "^1.9.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jugstalt/leaflet-gl-vectortiles.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jugstalt/leaflet-gl-vectortiles/issues"
+  },
+  "homepage": "https://github.com/jugstalt/leaflet-gl-vectortiles#readme",
+  "license": "Apache-2.0"
+}
