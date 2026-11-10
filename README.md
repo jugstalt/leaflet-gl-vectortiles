@@ -108,6 +108,7 @@ otherwise zooming beyond it gives no scale in Leaflet.
 | `maxConcurrentRenders` | `4` | tile images rendered in the worker at the same time |
 | `renderBudget` | `12` | milliseconds per frame for rendering tile images on the main thread (fallback) |
 | `maxCachedTiles` | `384` | tiles kept in memory |
+| `liveZoomInterval` | `150` | milliseconds between sharp redraws during a zoom gesture (pinch, smooth wheel zoom); `0`: only at its end |
 | `fetchOptions` | `{}` | options for `fetch`, e.g. `{ credentials: 'include' }` or headers for authorization |
 | `debug` | `false` | draw the tile borders and coordinates |
 | `pane` | `'overlayPane'` | the Leaflet pane |
@@ -115,6 +116,21 @@ otherwise zooming beyond it gives no scale in Leaflet.
 
 Events: `load` (style loaded), `error` (`e.error`). Methods: `getStyle()`, `getGrid()`.
 Static: `L.glVectorTiles.createCrs(grid, proj4Definition, options)`, `L.glVectorTiles.decodeTile(arrayBuffer)`.
+
+### Smooth zooming
+
+Labels and icons are drawn on their own canvas: while the map zooms they keep their size and move with the map.
+For continuous zooming with the mouse wheel (instead of Leaflet's animated steps) the plugin adds a map handler:
+
+```js
+const map = L.map('map', {
+  zoomSnap: 0,              // any zoom, not only whole levels
+  smoothWheelZoom: true,    // replaces scrollWheelZoom
+  smoothWheelSpeed: 1       // about half a zoom level per wheel notch
+});
+```
+
+While zooming this way (or pinching on a touch screen) the map is redrawn sharp every `liveZoomInterval` ms.
 
 ## Limits
 

@@ -7,6 +7,9 @@
 - Labels are drawn from cached images (text with halo, glyphs, icons cut out of the sprite sheet): no text
   drawing per frame, halos are drawn once.
 - Stable labels: labels shown before keep their place when the map is panned.
+- Sharp redraws during zoom gestures without animation (pinch, smooth wheel zoom), every `liveZoomInterval` ms.
+- Map handler `smoothWheelZoom` (map options `smoothWheelZoom: true`, `smoothWheelSpeed`): continuous wheel zoom
+  around the mouse position.
 - Fix: tile URLs relative to a TileJSON file (`…/tiles.json`) are resolved against its folder, not against the
   file as if it were a folder (e.g. BEV Kataster `../../tiles/…`).
 - Example page: service presets (basemap.at, BEV Kataster), several styles on top of each other,

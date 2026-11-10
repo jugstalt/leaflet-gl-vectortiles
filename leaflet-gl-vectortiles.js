@@ -868,6 +868,9 @@
             worker: true,
             // tile images rendered in the worker at the same time
             maxConcurrentRenders: 4,
+            // milliseconds between redraws during a zoom gesture without animation (pinch, smoothWheelZoom):
+            // the map is drawn sharp at the current zoom while zooming; 0 = only at the end of the gesture
+            liveZoomInterval: 150,
             // fetch options, e.g. { credentials: 'include' } or { headers: { Authorization: ... } }
             fetchOptions: {},
             attribution: null
@@ -1213,6 +1216,13 @@
         _onZoom: function () {
             this._updateTransform(this._map.getCenter(), this._map.getZoom());
             this._paintLabels();
+
+            // a gesture (pinch, smooth wheel zoom) moves the map frame by frame: redraw sharp now and then
+            var interval = this.options.liveZoomInterval;
+            if (interval > 0 && !this._map._animatingZoom && Date.now() - (this._lastLive || 0) >= interval) {
+                this._lastLive = Date.now();
+                this._update();
+            }
         },
 
         _onAnimZoom: function (e) {
@@ -2199,6 +2209,66 @@
             ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
         }
     });
+
+    /**
+     * Smooth wheel zoom: the map zooms continuously towards the zoom the wheel asks for, around the mouse position,
+     * instead of in animated steps. Map options: `smoothWheelZoom: true` (replaces scrollWheelZoom),
+     * `smoothWheelSpeed` (default 1: about half a zoom level per wheel notch).
+     */
+    var SmoothWheelZoom = L.Handler.extend({
+        addHooks: function () {
+            if (this._map.scrollWheelZoom) this._map.scrollWheelZoom.disable();
+            L.DomEvent.on(this._map._container, 'wheel', this._onWheel, this);
+        },
+
+        removeHooks: function () {
+            L.DomEvent.off(this._map._container, 'wheel', this._onWheel, this);
+            if (this._frame) L.Util.cancelAnimFrame(this._frame);
+            this._frame = null;
+            if (this._active) this._end();
+        },
+
+        _onWheel: function (e) {
+            L.DomEvent.stop(e);
+            var map = this._map;
+            if (!this._active) {
+                map._stop();
+                this._active = true;
+                this._zoom = this._goal = map.getZoom();
+                map.fire('movestart').fire('zoomstart');
+            }
+            var speed = map.options.smoothWheelSpeed || 1;
+            this._goal = map._limitZoom(this._goal + L.DomEvent.getWheelDelta(e) / 100 * speed);
+            // the point under the mouse stays where it is
+            this._point = map.mouseEventToContainerPoint(e);
+            this._anchor = map.containerPointToLatLng(this._point);
+            if (!this._frame) this._frame = L.Util.requestAnimFrame(this._step, this);
+        },
+
+        _step: function () {
+            this._frame = null;
+            var map = this._map;
+            if (!map || !this._active) return;
+
+            var diff = this._goal - this._zoom;
+            this._zoom = Math.abs(diff) < 0.002 ? this._goal : this._zoom + diff * 0.2;
+
+            var half = map.getSize().divideBy(2);
+            var center = map.unproject(map.project(this._anchor, this._zoom).subtract(this._point.subtract(half)), this._zoom);
+            map._move(center, this._zoom);
+
+            if (this._zoom === this._goal) this._end();
+            else this._frame = L.Util.requestAnimFrame(this._step, this);
+        },
+
+        _end: function () {
+            this._active = false;
+            this._map._moveEnd(true);
+        }
+    });
+    L.Map.mergeOptions({ smoothWheelZoom: false, smoothWheelSpeed: 1 });
+    L.Map.addInitHook('addHandler', 'smoothWheelZoom', SmoothWheelZoom);
+    GLVectorTiles.SmoothWheelZoom = SmoothWheelZoom;
 
     /**
      * A Proj4Leaflet CRS for the grid of a gView vector tile cache: the map's zoom levels are then exactly the

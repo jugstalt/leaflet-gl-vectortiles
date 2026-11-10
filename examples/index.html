@@ -40,6 +40,7 @@
     <input id="proj4def" type="text" value="">
   </label>
   <label><input id="osm" type="checkbox"> OpenStreetMap background (WebMercator only)</label>
+  <label><input id="smooth" type="checkbox" checked> smooth wheel zoom</label>
   <label><input id="debug" type="checkbox"> show tile grid</label>
   <label><input id="declutter" type="checkbox" checked> declutter labels</label>
   <button id="load">Load</button>
@@ -119,7 +120,8 @@
 
     // Proj4Leaflet knows only the zoom levels it has resolutions for: limit the map to them
     const maxZoom = crs.options && crs.options.resolutions ? crs.options.resolutions.length - 1 : 20;
-    map = L.map('map', { crs, maxZoom, zoomSnap: 0, zoomDelta: 0.5, wheelPxPerZoomLevel: 120 });
+    map = L.map('map', { crs, maxZoom, zoomSnap: 0, zoomDelta: 0.5, wheelPxPerZoomLevel: 120,
+                     smoothWheelZoom: $('smooth').checked });
     window.vtcMap = map;   // for debugging in the console
 
     // OpenStreetMap raster tiles below the vector tiles: only possible on a WebMercator map
