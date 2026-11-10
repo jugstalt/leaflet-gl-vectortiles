@@ -868,9 +868,11 @@
             worker: true,
             // tile images rendered in the worker at the same time
             maxConcurrentRenders: 4,
-            // milliseconds between redraws during a zoom gesture without animation (pinch, smoothWheelZoom):
-            // the map is drawn sharp at the current zoom while zooming; 0 = only at the end of the gesture
-            liveZoomInterval: 150,
+            // milliseconds between redraws while the map is dragged or zoomed without animation (pinch,
+            // smoothWheelZoom): tiles are loaded and drawn during the gesture; 0 = only at its end
+            liveRedrawInterval: 150,
+            // the canvas reaches this part of the map size beyond each edge: panning shows map there at once
+            padding: 0.15,
             // fetch options, e.g. { credentials: 'include' } or { headers: { Authorization: ... } }
             fetchOptions: {},
             attribution: null
@@ -915,6 +917,7 @@
             var events = {
                 viewreset: this._reset,
                 zoom: this._onZoom,
+                move: this._onMove,
                 moveend: this._update,
                 zoomend: this._update,
                 resize: this._resize
@@ -1191,15 +1194,24 @@
             delete this._images[key];
         },
 
+        // the canvas: the map size plus padding on each side; its top left corner in layer pixels
+        _pad: function () {
+            return this._map.getSize().multiplyBy(this.options.padding || 0).round();
+        },
+
+        _canvasSize: function () {
+            return this._map.getSize().add(this._pad().multiplyBy(2));
+        },
+
         _layerOrigin: function () {
-            return this._map.containerPointToLayerPoint([0, 0]);
+            return this._map.containerPointToLayerPoint(this._pad().multiplyBy(-1));
         },
 
         // ---------------------------------------------------------------- canvas placement (as L.Renderer)
 
         _resize: function () {
             if (!this._canvas) return;
-            var size = this._map.getSize(), ratio = window.devicePixelRatio || 1;
+            var size = this._canvasSize(), ratio = window.devicePixelRatio || 1;
             this._canvas.width = Math.round(size.x * ratio);
             this._canvas.height = Math.round(size.y * ratio);
             this._canvas.style.width = size.x + 'px';
@@ -1217,8 +1229,12 @@
             this._updateTransform(this._map.getCenter(), this._map.getZoom());
             this._paintLabels();
 
-            // a gesture (pinch, smooth wheel zoom) moves the map frame by frame: redraw sharp now and then
-            var interval = this.options.liveZoomInterval;
+            this._liveRedraw();
+        },
+
+        // dragging, pinching, smooth wheel zoom move the map frame by frame: load and draw now and then
+        _liveRedraw: function () {
+            var interval = this.options.liveRedrawInterval;
             if (interval > 0 && !this._map._animatingZoom && Date.now() - (this._lastLive || 0) >= interval) {
                 this._lastLive = Date.now();
                 this._update();
@@ -1257,7 +1273,7 @@
             if (!this._center) return;
             var map = this._map,
                 scale = map.getZoomScale(zoom, this._zoom),
-                viewHalf = map.getSize().multiplyBy(0.5),
+                viewHalf = map.getSize().multiplyBy(0.5).add(this._pad()),
                 currentCenterPoint = map.project(this._center, zoom),
                 topLeftOffset = viewHalf.multiplyBy(-scale).add(currentCenterPoint).subtract(map._getNewPixelOrigin(center, zoom));
 
@@ -1275,13 +1291,27 @@
 
         _update: function () {
             if (!this._map || !this._canvas || !this._style || !this._validResolution()) return;
-            var map = this._map;
-            this._center = map.getCenter();
-            this._zoom = map.getZoom();
-            L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0, 0]));
-            L.DomUtil.setPosition(this._labelCanvas, map.containerPointToLayerPoint([0, 0]));
             this._requestTiles();
             this._redraw();
+        },
+
+        // panning (dragging, inertia): the canvases move with the map pane, labels are not placed again
+        _isPanning: function () {
+            var map = this._map, drag = map.dragging && map.dragging._draggable;
+            return !!((drag && drag._moving) || (map._panAnim && map._panAnim._inProgress));
+        },
+
+        _onMove: function () {
+            this._lastMove = Date.now();
+            var interval = this.options.liveRedrawInterval;
+            if (!this._canvasOrigin || this._map.getZoom() !== this._zoom || !(interval > 0)) return;   // zoom: _onZoom
+            if (Date.now() - (this._lastLive || 0) < interval) return;
+            this._lastLive = Date.now();
+            this._requestTiles();
+            // the canvas moves with the map: redraw only when the padding is about to run out
+            // (new tiles redraw when they arrive)
+            var moved = this._layerOrigin().subtract(this._canvasOrigin), pad = this._pad();
+            if (Math.abs(moved.x) > pad.x / 2 || Math.abs(moved.y) > pad.y / 2) this._redraw();
         },
 
         // ---------------------------------------------------------------- grid math
@@ -1335,13 +1365,13 @@
         _toCanvas: function (x, y) {
             var map = this._map, crs = map.options.crs;
             var p = crs.transformation.transform(L.point(x, y), crs.scale(map.getZoom()));
-            return p.subtract(map.getPixelOrigin()).subtract(map.containerPointToLayerPoint([0, 0]));
+            return p.subtract(map.getPixelOrigin()).subtract(this._layerOrigin());
         },
 
         // canvas pixel → world (CRS)
         _toWorld: function (px, py) {
             var map = this._map, crs = map.options.crs;
-            var p = L.point(px, py).add(map.containerPointToLayerPoint([0, 0])).add(map.getPixelOrigin());
+            var p = L.point(px, py).add(this._layerOrigin()).add(map.getPixelOrigin());
             return crs.transformation.untransform(p, crs.scale(map.getZoom()));
         },
 
@@ -1353,7 +1383,7 @@
         },
 
         _visibleTiles: function (grid, level) {
-            var size = this._map.getSize(), res = grid.resolutions[level];
+            var size = this._canvasSize(), res = grid.resolutions[level];
             var a = this._toWorld(0, 0), b = this._toWorld(size.x, size.y);
             var minX = Math.min(a.x, b.x), maxX = Math.max(a.x, b.x), minY = Math.min(a.y, b.y), maxY = Math.max(a.y, b.y);
 
@@ -1392,7 +1422,7 @@
 
         _requestTiles: function () {
             var resolution = this._mapResolution(), self = this;
-            var size = this._map.getSize(), cx = size.x / 2, cy = size.y / 2;
+            var size = this._canvasSize(), cx = size.x / 2, cy = size.y / 2;
             var wanted = {}, pending = [];
 
             Object.keys(this._sources).forEach(function (id) {
@@ -1531,7 +1561,17 @@
             if (!this._ctx || !this._style || !this._validResolution()) return;
             this._lastRedraw = Date.now();
 
-            var ctx = this._ctx, ratio = window.devicePixelRatio || 1, size = this._map.getSize();
+            // the canvases at the current view (not during a zoom animation: they are scaled by CSS then)
+            var map = this._map;
+            if (!map._animatingZoom) {
+                this._center = map.getCenter();
+                this._zoom = map.getZoom();
+                this._canvasOrigin = this._layerOrigin();
+                L.DomUtil.setPosition(this._canvas, this._canvasOrigin);
+                L.DomUtil.setPosition(this._labelCanvas, this._canvasOrigin);
+            }
+
+            var ctx = this._ctx, ratio = window.devicePixelRatio || 1, size = this._canvasSize();
             ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
             ctx.clearRect(0, 0, size.x, size.y);
 
@@ -1629,18 +1669,15 @@
                 this._scheduleRender();
             }
 
-            // symbols (icons, labels) of all tiles, placed with collision handling on every redraw
-            this._style.layers.forEach(function (styleLayer, layerIndex) {
-                if (styleLayer.type !== 'symbol') return;
-                var current = perSource[styleLayer.source];
-                if (!current || !self._layerVisible(styleLayer, current.zoom)) return;
-                current.drawables.forEach(function (d) {
-                    self._drawLayerTile(ctx, styleLayer, layerIndex, d, current.zoom, labels);
-                });
-            });
-
-            this._placeSymbols(labels);
-            this._paintLabels();
+            // labels: placed again on every redraw, except while panning (they move with the map, the labels of
+            // newly visible parts are placed when the browser has time)
+            this._perSource = perSource;
+            if (this._isPanning() && this._placedZoom === this._zoom) {
+                this._paintLabels();
+                this._requestIdlePlacement();
+            } else {
+                this._placeLabels();
+            }
 
             if (this.options.debug) {
                 ctx.strokeStyle = 'rgba(255,0,0,.6)';
@@ -1683,7 +1720,7 @@
                 // overzoomed far beyond the cache: the whole tile would be a huge image
                 if (!this._worker) return null;   // main thread: drawn directly
                 // worker: only the visible part of the tile, positioned in layer coordinates (stable while panning)
-                var size = this._map.getSize(), origin = this._layerOrigin();
+                var size = this._canvasSize(), origin = this._layerOrigin();
                 var vx = Math.max(0, d.clip[0]), vy = Math.max(0, d.clip[1]);
                 var vw = Math.min(size.x, d.clip[0] + d.clip[2]) - vx, vh = Math.min(size.y, d.clip[1] + d.clip[3]) - vy;
                 if (vw <= 0 || vh <= 0) return undefined;
@@ -1705,7 +1742,7 @@
 
         // render jobs to the worker, nearest to the center first, a few at a time
         _sendRenderJobs: function () {
-            var size = this._map.getSize(), cx = size.x / 2, cy = size.y / 2, queue = this._renderQueue, self = this;
+            var size = this._canvasSize(), cx = size.x / 2, cy = size.y / 2, queue = this._renderQueue, self = this;
             var ratio = window.devicePixelRatio || 1;
             var keys = Object.keys(queue).sort(function (a, b) {
                 var da = queue[a].d.clip, db = queue[b].d.clip;
@@ -1761,7 +1798,7 @@
                 this._renderRequested = false;
                 if (!this._map || !this._ctx) return;
 
-                var size = this._map.getSize(), cx = size.x / 2, cy = size.y / 2, queue = this._renderQueue;
+                var size = this._canvasSize(), cx = size.x / 2, cy = size.y / 2, queue = this._renderQueue;
                 var keys = Object.keys(queue).sort(function (a, b) {
                     var da = queue[a].d.clip, db = queue[b].d.clip;
                     return Math.hypot(da[0] + da[2] / 2 - cx, da[1] + da[3] / 2 - cy) - Math.hypot(db[0] + db[2] / 2 - cx, db[1] + db[3] / 2 - cy);
@@ -1880,7 +1917,7 @@
                 }
             }
 
-            var clip = drawable.clip, self = this;
+            var clip = drawable.clip, self = this, area = this._labelArea;
             var size = this._layout(styleLayer, 'text-size', feature, zoom, 16);
             var iconEntry = iconName ? this._spriteEntry(iconName) : null;
             var iconColor = this._paint(styleLayer, 'icon-color', feature, zoom, null);
@@ -1888,6 +1925,7 @@
             anchorPoints.forEach(function (a) {
                 // only symbols anchored inside this tile: the neighbor tile draws its own
                 if (a.x < clip[0] || a.y < clip[1] || a.x >= clip[0] + clip[2] || a.y >= clip[1] + clip[3]) return;
+                if (area && (a.x < 0 || a.y < 0 || a.x > area.x || a.y > area.y)) return;
 
                 labels.push({
                     id: styleLayer.id + '|' + (iconName || '') + '|' + (text || ''),
@@ -1976,7 +2014,7 @@
             var measure = L.bind(this._measure, this);
 
             // position keys in layer pixels: the same feature has the same key while the map is only panned
-            var origin = this._layerOrigin(), zoom = this._map.getZoom();
+            var origin = this._canvasOrigin || this._layerOrigin(), zoom = this._zoom;
             if (zoom !== this._shownZoom) { this._shown = {}; this._shownZoom = zoom; }
             var previous = this._shown, shown = {};
             labels.forEach(function (l) {
@@ -2069,7 +2107,47 @@
             placed.sort(function (a, b) { return rank.get(a.l) - rank.get(b.l); });
 
             this._placed = placed;
+            this._placedOrigin = this._canvasOrigin;
+            this._placedZoom = this._zoom;
+            this._lastPlacement = Date.now();
             this._shown = shown;
+        },
+
+        // symbols (icons, labels) of all drawn tiles, placed with collision handling; only those anchored on the
+        // canvas (tiles reach far beyond it)
+        _placeLabels: function () {
+            var perSource = this._perSource, labels = [], self = this;
+            if (!perSource) return;
+            this._labelArea = this._canvasSize();
+            this._style.layers.forEach(function (styleLayer, layerIndex) {
+                if (styleLayer.type !== 'symbol') return;
+                var current = perSource[styleLayer.source];
+                if (!current || !self._layerVisible(styleLayer, current.zoom)) return;
+                current.drawables.forEach(function (d) {
+                    self._drawLayerTile(self._ctx, styleLayer, layerIndex, d, current.zoom, labels);
+                });
+            });
+            this._placeSymbols(labels);
+            this._paintLabels();
+        },
+
+        // placing labels takes longer than a frame on dense maps: only when the map rests a moment while panning
+        _requestIdlePlacement: function () {
+            if (this._idlePlacement) return;
+            var self = this, wait = Math.max(200 - (Date.now() - (this._lastMove || 0)), 400 - (Date.now() - (this._lastPlacement || 0)), 0);
+            this._idlePlacement = setTimeout(function () {
+                if (Date.now() - (self._lastMove || 0) < 200) {   // still moving
+                    self._idlePlacement = null;
+                    self._requestIdlePlacement();
+                    return;
+                }
+                var run = function () {
+                    self._idlePlacement = null;
+                    if (self._map && self._labelCtx && self._placedZoom === self._zoom && !self._map._animatingZoom) self._placeLabels();
+                };
+                if (window.requestIdleCallback) window.requestIdleCallback(run, { timeout: 500 });
+                else run();
+            }, wait);
         },
 
         _measure: function (text) {
@@ -2159,12 +2237,15 @@
         _paintLabels: function () {
             var ctx = this._labelCtx;
             if (!ctx || !this._map) return;
-            var ratio = window.devicePixelRatio || 1, size = this._map.getSize();
+            var ratio = window.devicePixelRatio || 1, size = this._canvasSize();
             ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
             ctx.clearRect(0, 0, size.x, size.y);
             if (!this._placed.length) return;
 
             var m = this._canvasTransform(), own = L.DomUtil.getPosition(this._labelCanvas) || L.point(0, 0);
+            // labels placed at an earlier canvas position (panned since): shifted into the current canvas
+            var shiftX = this._placedOrigin && this._canvasOrigin ? this._placedOrigin.x - this._canvasOrigin.x : 0;
+            var shiftY = this._placedOrigin && this._canvasOrigin ? this._placedOrigin.y - this._canvasOrigin.y : 0;
             var self = this, maxX = size.x + 256, maxY = size.y + 256;
 
             // one transform per image (rotation about the anchor, device pixel ratio): no save/restore per label
@@ -2177,7 +2258,7 @@
             var placed = this._placed;
             for (var i = 0; i < placed.length; i++) {
                 var p = placed[i], l = p.l;
-                var x = m.e + m.a * l.x - own.x, y = m.f + m.a * l.y - own.y;
+                var x = m.e + m.a * (l.x + shiftX) - own.x, y = m.f + m.a * (l.y + shiftY) - own.y;
                 if (x < -256 || y < -256 || x > maxX || y > maxY) continue;
 
                 if (p.icon) {

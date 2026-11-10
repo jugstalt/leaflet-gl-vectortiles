@@ -108,7 +108,8 @@ otherwise zooming beyond it gives no scale in Leaflet.
 | `maxConcurrentRenders` | `4` | tile images rendered in the worker at the same time |
 | `renderBudget` | `12` | milliseconds per frame for rendering tile images on the main thread (fallback) |
 | `maxCachedTiles` | `384` | tiles kept in memory |
-| `liveZoomInterval` | `150` | milliseconds between sharp redraws during a zoom gesture (pinch, smooth wheel zoom); `0`: only at its end |
+| `liveRedrawInterval` | `150` | milliseconds between redraws while the map is dragged or zoomed without animation (pinch, smooth wheel zoom): tiles are loaded and drawn during the gesture; `0`: only at its end |
+| `padding` | `0.15` | the canvas reaches this part of the map size beyond each edge, so panning shows map there at once |
 | `fetchOptions` | `{}` | options for `fetch`, e.g. `{ credentials: 'include' }` or headers for authorization |
 | `debug` | `false` | draw the tile borders and coordinates |
 | `pane` | `'overlayPane'` | the Leaflet pane |
@@ -130,7 +131,8 @@ const map = L.map('map', {
 });
 ```
 
-While zooming this way (or pinching on a touch screen) the map is redrawn sharp every `liveZoomInterval` ms.
+While zooming this way (or pinching on a touch screen), and while the map is dragged, tiles are loaded and the map
+is redrawn every `liveRedrawInterval` ms.
 
 ## Limits
 

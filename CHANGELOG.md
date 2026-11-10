@@ -7,7 +7,13 @@
 - Labels are drawn from cached images (text with halo, glyphs, icons cut out of the sprite sheet): no text
   drawing per frame, halos are drawn once.
 - Stable labels: labels shown before keep their place when the map is panned.
-- Sharp redraws during zoom gestures without animation (pinch, smooth wheel zoom), every `liveZoomInterval` ms.
+- Tiles are loaded and drawn during gestures: while dragging, pinching and smooth wheel zooming, every
+  `liveRedrawInterval` ms.
+- Smooth panning: while the map is dragged, labels move with it and are not placed again (new ones when the map
+  rests for a moment or at the end); the canvas is only redrawn when new tiles arrive or the padding runs out.
+- Option `padding` (default 0.15): the canvas reaches beyond the map's edges, panning shows map there at once.
+- Faster redraws: labels are only collected where they can be seen (tiles reach far beyond the canvas); a redraw
+  of basemap.at in Vienna takes about 10–20 ms instead of 45 ms.
 - Map handler `smoothWheelZoom` (map options `smoothWheelZoom: true`, `smoothWheelSpeed`): continuous wheel zoom
   around the mouse position.
 - Fix: tile URLs relative to a TileJSON file (`…/tiles.json`) are resolved against its folder, not against the
