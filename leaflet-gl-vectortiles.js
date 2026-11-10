@@ -1319,10 +1319,10 @@
         getEvents: function () {
             var events = {
                 viewreset: this._reset,
+                movestart: this._onMoveStart,
                 zoom: this._onZoom,
                 move: this._onMove,
-                moveend: this._update,
-                zoomend: this._update,
+                moveend: this._onMoveEnd,
                 resize: this._resize
             };
             if (this._map.options.zoomAnimation) {
@@ -1868,6 +1868,34 @@
             }
         },
 
+        // the tile canvas as it is now (before a redraw clears it), with the map pixels and zoom it shows
+        _keepFrame: function () {
+            if (this._frameZoom === undefined || this._frameZoom === null || !this._canvas.width) return null;
+            var keep = this._frameCanvas || (this._frameCanvas = document.createElement('canvas'));
+            if (keep.width !== this._canvas.width || keep.height !== this._canvas.height) {
+                keep.width = this._canvas.width;
+                keep.height = this._canvas.height;
+            }
+            var c = keep.getContext('2d');
+            c.setTransform(1, 0, 0, 1, 0, 0);
+            c.clearRect(0, 0, keep.width, keep.height);
+            c.drawImage(this._canvas, 0, 0);
+            return { canvas: keep, global: this._frameGlobal, zoom: this._frameZoom, ratio: this._ratio() };
+        },
+
+        // a kept frame at the current zoom and position
+        _drawFrame: function (ctx, frame, rects) {
+            var map = this._map, scale = map.getZoomScale(map.getZoom(), frame.zoom);
+            var origin = this._layerOrigin().add(map.getPixelOrigin());
+            ctx.save();
+            ctx.beginPath();
+            rects.forEach(function (r) { ctx.rect(r[0], r[1], r[2], r[3]); });
+            ctx.clip();
+            ctx.drawImage(frame.canvas, frame.global.x * scale - origin.x, frame.global.y * scale - origin.y,
+                frame.canvas.width / frame.ratio * scale, frame.canvas.height / frame.ratio * scale);
+            ctx.restore();
+        },
+
         // fading in: the opacity of a tile image (first drawn at _tileShownAt[key])
         _tileAlpha: function (key, now) {
             var duration = this.options.fadeDuration;
@@ -1974,11 +2002,22 @@
         },
 
         // dragging, pinching, smooth wheel zoom move the map frame by frame: load and draw now and then
+        // during a gesture (dragging, wheel, pinch, animated zoom) tiles are loaded and finished tile images drawn,
+        // labels only move with the map; at its end everything is drawn once, labels placed again
+        _onMoveStart: function () {
+            this._moving = true;
+        },
+
+        _onMoveEnd: function () {
+            this._moving = false;
+            this._update();
+        },
+
         _liveRedraw: function () {
             var interval = this.options.liveRedrawInterval;
             if (interval > 0 && !this._map._animatingZoom && Date.now() - (this._lastLive || 0) >= interval) {
                 this._lastLive = Date.now();
-                this._update();
+                this._update();   // during a gesture: tiles only (see _redraw)
             }
         },
 
@@ -2066,7 +2105,6 @@
         },
 
         _onMove: function () {
-            this._lastMove = Date.now();
             var interval = this.options.liveRedrawInterval;
             if (!this._canvasOrigin || this._map.getZoom() !== this._zoom || !(interval > 0)) return;   // zoom: _onZoom
             if (Date.now() - (this._lastLive || 0) < interval) return;
@@ -2351,11 +2389,13 @@
                 this._center = map.getCenter();
                 this._zoom = map.getZoom();
                 this._canvasOrigin = this._layerOrigin();
+                this._canvasGlobal = this._canvasOrigin.add(map.getPixelOrigin());
                 L.DomUtil.setPosition(this._canvas, this._canvasOrigin);
                 L.DomUtil.setPosition(this._labelCanvas, this._canvasOrigin);
             }
 
             var ctx = this._ctx, ratio = this._ratio(), size = this._canvasSize();
+            var previous = this._keepFrame();
             ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
             ctx.clearRect(0, 0, size.x, size.y);
 
@@ -2368,11 +2408,15 @@
             Object.keys(this._sources).forEach(function (id) {
                 var source = self._sources[id], grid = source.grid;
                 var level = self._level(source, resolution);
-                var drawables = [];
+                var drawables = [], missing = [];
                 self._visibleTiles(grid, level).forEach(function (t) {
                     var d = self._drawableTile(id, source, t);
-                    if (!d) return;
                     var clipEnv = self._tileEnvelope(grid, t.level, t.row, t.col);
+                    if (!d) {
+                        var m0 = self._toCanvas(clipEnv.minX, clipEnv.maxY), m1 = self._toCanvas(clipEnv.maxX, clipEnv.minY);
+                        missing.push([m0.x, m0.y, m1.x - m0.x, m1.y - m0.y]);
+                        return;
+                    }
                     var env = self._tileEnvelope(grid, d.tile.level, d.tile.row, d.tile.col);
                     var p0 = self._toCanvas(env.minX, env.maxY), p1 = self._toCanvas(env.maxX, env.minY);
                     var c0 = self._toCanvas(clipEnv.minX, clipEnv.maxY), c1 = self._toCanvas(clipEnv.maxX, clipEnv.minY);
@@ -2381,7 +2425,7 @@
                     var x0 = snap(c0.x), y0 = snap(c0.y), x1 = snap(c1.x), y1 = snap(c1.y);
                     drawables.push({ entry: d.entry, x0: p0.x, y0: p0.y, sx: p1.x - p0.x, sy: p1.y - p0.y, clip: [x0, y0, x1 - x0, y1 - y0], tile: d.tile, req: t });
                 });
-                perSource[id] = { zoom: self._styleZoom(source, resolution), drawables: drawables };
+                perSource[id] = { zoom: self._styleZoom(source, resolution), drawables: drawables, missing: missing };
             });
 
             var firstSource = perSource[Object.keys(perSource)[0]];
@@ -2406,11 +2450,31 @@
             // geometry layers per run and tile from the tile image cache (rendered in the worker or in frame chunks)
             var now = Date.now(), fading = false;
             this._renderQueue = {};
+            var ops = [], gaps = [];
             (this._runs || []).forEach(function (run) {
-                var id = run.source, current = perSource[id];
+                var current = perSource[run.source];
                 if (!current) return;   // a source that could not be loaded
+                gaps = gaps.concat(current.missing);
                 current.drawables.forEach(function (d) {
-                    var image = self._tileImage(id, d, current.zoom, usedImages, run);
+                    var image = self._tileImage(run.source, d, current.zoom, usedImages, run);
+                    if (image === undefined) gaps.push(d.clip);
+                    ops.push({ run: run, current: current, d: d, image: image });
+                });
+            });
+            // tiles of a new zoom level not rendered yet: the last frame (scaled to this zoom) fills the gaps, so the
+            // map doesn't disappear while zooming
+            // only where tiles are missing: below finished tiles it would double semi-transparent fills
+            var gapKeys = {};
+            if (gaps.length && previous) {
+                this._drawFrame(ctx, previous, gaps);
+                gaps.forEach(function (g) { gapKeys[g.map(Math.round).join(',')] = true; });
+            }
+
+            ops.forEach(function (op) {
+                var run = op.run, id = run.source, current = op.current, d = op.d, image = op.image;
+                // several runs: a tile where one of them is missing shows the last frame only (until all are there)
+                if (gapKeys[d.clip.map(Math.round).join(',')]) return;
+                {
                     if (image && image.layerRect) {
                         // overzoomed part rendered in the worker: placed by its map pixels at the zoom it was rendered
                         // for, scaled to the current zoom (the image of a slightly different zoom, until the new one)
@@ -2448,8 +2512,11 @@
                         self._drawLayerTile(ctx, styleLayer, layerIndex, d, current.zoom, null);
                     });
                     ctx.restore();
-                });
+                }
             });
+            // what this frame shows: kept for the next redraw (see _keepFrame)
+            this._frameGlobal = this._layerOrigin().add(map.getPixelOrigin());
+            this._frameZoom = map.getZoom();
             // tile images not drawn now are dropped
             Object.keys(this._images).forEach(function (key) { if (!usedImages[key] && !self._rendering[key]) self._dropImage(key); });
             this._scheduleRender();
@@ -2460,9 +2527,8 @@
             this._perSource = perSource;
             if (fading) this._requestFadeFrame();
 
-            if ((this._isPanning() || this._fadeRedraw) && this._placedZoom === this._zoom) {
-                this._paintLabels();
-                this._requestIdlePlacement();
+            if (this._moving || this._fadeRedraw || this._isPanning()) {
+                this._paintLabels();   // moved with the map; placed again at the end of the gesture
             } else {
                 this._placeLabels();
             }
@@ -2781,6 +2847,8 @@
             var origin = this._canvasOrigin || this._layerOrigin(), zoom = this._zoom;
             if (zoom !== this._shownZoom) { this._shown = {}; this._shownZoom = zoom; }
             var previous = this._shown, shown = {}, now = Date.now();
+            var refade = !!this._labelsFaded;   // faded out while zooming out: all fade in again
+            this._labelsFaded = false;
             // labels seen in the last seconds (by text and icon): no fading in after a zoom step, also when an
             // intermediate placement (tiles still loading) showed only a few of them
             var seenIds = this._shownIds;
@@ -2877,7 +2945,7 @@
                 if (showIcon && !l.iconIgnorePlacement) push(icon.box);
                 if (showText && !l.textIgnorePlacement) push(text.box);
                 // shown since: new labels fade in (not those shown before the last zoom step)
-                var since = shown[l.key] = previous[l.key] || (seenIds[l.fadeId] !== undefined ? 1 : now);
+                var since = shown[l.key] = refade ? now : previous[l.key] || (seenIds[l.fadeId] !== undefined ? 1 : now);
                 seenIds[l.fadeId] = now;
                 placed.push({ l: l, icon: showIcon ? icon : null, text: showText ? text : null, since: since });
             });
@@ -2890,6 +2958,7 @@
             this._placed = placed;
             Object.keys(seenIds).forEach(function (id) { if (now - seenIds[id] > 10000) delete seenIds[id]; });
             this._placedOrigin = this._canvasOrigin;
+            this._placedGlobal = this._canvasGlobal;
             this._placedZoom = this._zoom;
             this._lastPlacement = Date.now();
             this._shown = shown;
@@ -2915,25 +2984,6 @@
             });
             this._placeSymbols(labels);
             this._paintLabels();
-        },
-
-        // placing labels takes longer than a frame on dense maps: only when the map rests a moment while panning
-        _requestIdlePlacement: function () {
-            if (this._idlePlacement) return;
-            var self = this, wait = Math.max(200 - (Date.now() - (this._lastMove || 0)), 400 - (Date.now() - (this._lastPlacement || 0)), 0);
-            this._idlePlacement = setTimeout(function () {
-                if (Date.now() - (self._lastMove || 0) < 200) {   // still moving
-                    self._idlePlacement = null;
-                    self._requestIdlePlacement();
-                    return;
-                }
-                var run = function () {
-                    self._idlePlacement = null;
-                    if (self._map && self._labelCtx && self._placedZoom === self._zoom && !self._map._animatingZoom) self._placeLabels();
-                };
-                if (window.requestIdleCallback) window.requestIdleCallback(run, { timeout: 500 });
-                else run();
-            }, wait);
         },
 
         _measure: function (text) {
@@ -3057,27 +3107,41 @@
             if (!this._placed.length) return;
 
             var m = this._canvasTransform(), own = L.DomUtil.getPosition(this._labelCanvas) || L.point(0, 0);
-            // labels placed at an earlier canvas position (panned since): shifted into the current canvas
-            var shiftX = this._placedOrigin && this._canvasOrigin ? this._placedOrigin.x - this._canvasOrigin.x : 0;
-            var shiftY = this._placedOrigin && this._canvasOrigin ? this._placedOrigin.y - this._canvasOrigin.y : 0;
+            // labels placed at an earlier canvas position or zoom: their anchors in map pixels, scaled to the zoom the
+            // canvas shows
+            var k = 1, shiftX = 0, shiftY = 0;
+            if (this._placedGlobal && this._canvasGlobal) {
+                k = this._map.getZoomScale(this._zoom, this._placedZoom);
+                shiftX = this._placedGlobal.x * k - this._canvasGlobal.x;
+                shiftY = this._placedGlobal.y * k - this._canvasGlobal.y;
+            }
             var self = this, maxX = size.x + 256, maxY = size.y + 256;
 
-            // one transform per image (rotation about the anchor, device pixel ratio): no save/restore per label
+            // zoomed out since the placement (during a gesture): the labels would pile up at the same size; they shrink
+            // with the map and fade out, gone one zoom level out (placed again at the end of the gesture)
+            var since = k * m.a, shrink = since < 1 ? since : 1;
+            var vanish = since < 1 ? Math.max(0, 1 + Math.log(since) / Math.LN2) : 1;
+            this._labelsFaded = vanish < 1;   // the next placement fades the labels in again
+            if (vanish <= 0) { ctx.setTransform(ratio, 0, 0, ratio, 0, 0); return; }
+
+            // one transform per image (rotation about the anchor, device pixel ratio, shrinking): no save/restore per label
+            var unit = ratio * shrink;
             function place(x, y, angle) {
-                if (!angle) { ctx.setTransform(ratio, 0, 0, ratio, ratio * x, ratio * y); return; }
-                var cos = Math.cos(angle) * ratio, sin = Math.sin(angle) * ratio;
+                if (!angle) { ctx.setTransform(unit, 0, 0, unit, ratio * x, ratio * y); return; }
+                var cos = Math.cos(angle) * unit, sin = Math.sin(angle) * unit;
                 ctx.setTransform(cos, sin, -sin, cos, ratio * x, ratio * y);
             }
 
             var placed = this._placed, now = Date.now(), fade = this.options.fadeDuration > 0 ? this.options.fadeDuration : 0, fading = false;
             for (var i = 0; i < placed.length; i++) {
                 var p = placed[i], l = p.l;
-                var x = m.e + m.a * (l.x + shiftX) - own.x, y = m.f + m.a * (l.y + shiftY) - own.y;
+                var x = m.e + m.a * (l.x * k + shiftX) - own.x, y = m.f + m.a * (l.y * k + shiftY) - own.y;
                 if (x < -256 || y < -256 || x > maxX || y > maxY) continue;
 
                 // new labels fade in
                 var alpha = fade ? Math.min(1, (now - p.since) / fade) : 1;
                 if (alpha < 1) fading = true;
+                alpha *= vanish;
 
                 if (p.icon) {
                     ctx.globalAlpha = alpha * (l.iconOpacity === undefined ? 1 : l.iconOpacity);

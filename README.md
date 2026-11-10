@@ -132,7 +132,7 @@ otherwise zooming beyond it gives no scale in Leaflet.
 | `maxConcurrentRenders` | `4` | tile images rendered in the worker at the same time |
 | `renderBudget` | `12` | milliseconds per frame for rendering tile images on the main thread (fallback) |
 | `maxCachedTiles` | `384` | tiles kept in memory |
-| `liveRedrawInterval` | `150` | milliseconds between redraws while the map is dragged or zoomed without animation (pinch, smooth wheel zoom): tiles are loaded and drawn during the gesture; `0`: only at its end |
+| `liveRedrawInterval` | `150` | milliseconds between redraws while the map is dragged or zoomed without animation (pinch, smooth wheel zoom): tiles are loaded and their finished images drawn during the gesture (labels only move with the map); `0`: only at its end |
 | `fadeDuration` | `200` | milliseconds to fade in new tiles and labels; `0`: no fading |
 | `preload` | `1` | rings of tiles loaded around the visible ones (after them); `0`: none |
 | `iconsInTiles` | `true` | icon-only symbol layers with `icon-allow-overlap` are drawn into the tile images (much less work per frame, e.g. the footpath dots of basemap.at); they don't hide other labels then, as with `icon-ignore-placement` |
@@ -199,8 +199,9 @@ const map = L.map('map', {
 });
 ```
 
-While zooming this way (or pinching on a touch screen), and while the map is dragged, tiles are loaded and the map
-is redrawn every `liveRedrawInterval` ms.
+While zooming this way (or pinching on a touch screen), and while the map is dragged, tiles are loaded and their
+finished images drawn every `liveRedrawInterval` ms. Labels are not placed again during a gesture: they move with the
+map and keep their size, and are placed once when the gesture ends (`moveend`).
 
 ### Performance
 

@@ -16,6 +16,14 @@
 - Example page: presets for basemap.de, OpenFreeMap (Liberty, Positron) and VersaTiles.
 - Styles with several sources render in the worker too, with the tile image cache: consecutive style layers of
   one source ("runs") get one image per tile (VersaTiles: a redraw ~100 ms instead of ~700 ms on the main thread).
+- Gestures (dragging, wheel zoom, pinch, animated zoom) only load tiles and draw finished tile images (1–5 ms per
+  redraw); labels move with the map, also across zoom levels, and are placed once when the gesture ends. Zooming
+  out, they shrink with the map and fade out (gone one level out, no pile of labels), and fade in again after the
+  placement. No more
+  label placement in between (also not when the map rests for a moment while dragging).
+- Zooming to another tile level: the last frame (scaled to the new zoom) fills the tiles whose images are not
+  rendered yet (only those: below finished tiles it would double semi-transparent fills), the map no longer
+  disappears while the labels are shown.
 - Faster labels: a label along a line is drawn once into its own image (one image per frame instead of one per
   glyph and halo; kept while the label stays), labels that are invisible at the zoom (size or opacity 0) are not
   placed, points outside the canvas are skipped before the style is evaluated, line labels whose anchor already
