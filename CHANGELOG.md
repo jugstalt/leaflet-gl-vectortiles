@@ -35,6 +35,7 @@ is loaded at `styleload`.
   of basemap.at in Vienna takes about 10–20 ms instead of 45 ms.
 - Map handler `smoothWheelZoom` (map options `smoothWheelZoom: true`, `smoothWheelSpeed`): continuous wheel zoom
   around the mouse position.
+- Fix: thin light seams at tile borders: tile images are placed on whole device pixels.
 - Fix: far overzoomed tiles (only the visible part rendered) were drawn at the position and size of the zoom they
   were rendered for within the same half zoom step: layers drawn on top of each other did not match until panned.
 - Fix: tile URLs relative to a TileJSON file (`…/tiles.json`) are resolved against its folder, not against the

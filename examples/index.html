@@ -74,7 +74,9 @@
     (window.vtcLayers || []).forEach(layer => {
       const groups = new Map();
       layer.getLayers().forEach(l => {
-        const name = l.id.split(/\/| - /)[0].trim();
+        // basemap.at "GEBAEUDE/…", BEV "Grundstücke - …"; otherwise (gView) the source layer
+        const name = /\/| - /.test(l.id) ? l.id.split(/\/| - /)[0].trim()
+          : (l.sourceLayer || l.id).replace(/__labels$/, '');
         if (!groups.has(name)) groups.set(name, []);
         groups.get(name).push(l);
       });

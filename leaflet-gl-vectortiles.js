@@ -2052,6 +2052,7 @@
 
             var resolution = this._mapResolution();
             var self = this, labels = [];
+            var snap = function (v) { return Math.round(v * ratio) / ratio; };
 
             // per source: style zoom and the tiles to draw, with their placement on the canvas
             var perSource = {};
@@ -2066,7 +2067,10 @@
                     var env = self._tileEnvelope(grid, d.tile.level, d.tile.row, d.tile.col);
                     var p0 = self._toCanvas(env.minX, env.maxY), p1 = self._toCanvas(env.maxX, env.minY);
                     var c0 = self._toCanvas(clipEnv.minX, clipEnv.maxY), c1 = self._toCanvas(clipEnv.maxX, clipEnv.minY);
-                    drawables.push({ entry: d.entry, x0: p0.x, y0: p0.y, sx: p1.x - p0.x, sy: p1.y - p0.y, clip: [c0.x, c0.y, c1.x - c0.x, c1.y - c0.y], tile: d.tile, req: t });
+                    // tile borders on whole device pixels: neighbor tiles share the rounded border, no antialiased
+                    // seam where the background shines through
+                    var x0 = snap(c0.x), y0 = snap(c0.y), x1 = snap(c1.x), y1 = snap(c1.y);
+                    drawables.push({ entry: d.entry, x0: p0.x, y0: p0.y, sx: p1.x - p0.x, sy: p1.y - p0.y, clip: [x0, y0, x1 - x0, y1 - y0], tile: d.tile, req: t });
                 });
                 perSource[id] = { zoom: self._styleZoom(source, resolution), drawables: drawables };
             });
