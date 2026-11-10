@@ -1067,7 +1067,9 @@
                         self.postMessage({ type: 'rendered', key: m.key, bitmap: null });
                         break;
                     }
-                    var canvas = new OffscreenCanvas(m.w, m.h), ctx = canvas.getContext('2d');
+                    // Chrome/Edge rasterize a 2D OffscreenCanvas on the GPU: thousands of small paths per tile keep the
+                    // GPU process busy and the page slow; in software (willReadFrequently) the worker thread does it
+                    var canvas = new OffscreenCanvas(m.w, m.h), ctx = canvas.getContext('2d', m.gpu ? undefined : { willReadFrequently: true });
                     // drawing coordinates are the map canvas coordinates of the main thread, mapped to the image
                     var view = m.view, sx = m.w / view[2], sy = m.h / view[3];
                     ctx.setTransform(sx, 0, 0, sy, -view[0] * sx, -view[1] * sy);
@@ -1251,6 +1253,9 @@
             iconsInTiles: true,
             // rings of tiles loaded around the visible ones (after them), so panning finds them loaded; 0 = none
             preload: 1,
+            // render tile images on the GPU (Chrome/Edge accelerate canvases; dense vector tiles are much faster in
+            // software, on the worker thread); false: software rendering
+            gpuTileRendering: false,
             // milliseconds to fade in new tiles and labels; 0 = no fading
             fadeDuration: 200,
             // economical defaults for weak clients (see LOW_POWER); options set explicitly take precedence
@@ -2595,6 +2600,10 @@
             }
 
             if (cached && !cached.layerRect && cached.zoomKey === zoomKey && cached.entry === d.entry) return cached.canvas;
+            // during a gesture an existing image is drawn scaled and rendered again at its end: zooming in, the
+            // images grow (up to 2048² px at a device pixel ratio of 2), rendering and uploading them every half zoom
+            // step is expensive (Chrome uploads each new image to the GPU)
+            if (cached && !cached.layerRect && this._moving && cached.entry === d.entry) return cached.canvas;
 
             this._renderQueue[key] = { sourceId: sourceId, d: d, zoom: zoom, zoomKey: zoomKey, from: run.from, to: run.to };
             return cached && !cached.layerRect ? cached.canvas : undefined;
@@ -2622,7 +2631,7 @@
                 self._worker.postMessage({
                     type: 'render', key: key, tileKey: self._key(job.sourceId, job.d.tile), sourceId: job.sourceId,
                     zoom: job.zoom, zoomKey: job.zoomKey, w: w, h: h, view: view, layerRect: job.layerRect || null, mapZoom: job.mapZoom,
-                    from: job.from, to: job.to,
+                    from: job.from, to: job.to, gpu: !!self.options.gpuTileRendering,
                     d: { x0: job.d.x0, y0: job.d.y0, sx: job.d.sx, sy: job.d.sy, clip: job.d.clip }
                 });
             });
@@ -2636,7 +2645,7 @@
             var canvas = cached && cached.canvas.width === w && cached.canvas.height === h ? cached.canvas : document.createElement('canvas');
             canvas.width = w;
             canvas.height = h;
-            var c = canvas.getContext('2d');
+            var c = canvas.getContext('2d', this.options.gpuTileRendering ? undefined : { willReadFrequently: true });
             c.clearRect(0, 0, w, h);
             // draw in the coordinates of the map canvas, shifted to the tile
             var sx = w / d.clip[2], sy = h / d.clip[3];

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Tile images are rendered in software on the worker thread (option `gpuTileRendering`, default false): Chrome and
+  Edge rasterize a 2D OffscreenCanvas on the GPU, and the thousands of small paths of dense vector tiles kept the
+  GPU process busy (6.6 s of 8.3 s in a trace of zooming into basemap.at), which slowed down the whole page.
+  Firefox renders in software anyway. Example page: a checkbox to compare.
+
+- During gestures, tiles that already have an image are drawn scaled and rendered again only at the end, instead
+  of at every half zoom step: zooming in, the images grow (up to 2048² px at a device pixel ratio of 2) and Chrome
+  and Edge upload every new image to the GPU (zooming in was slow there, not in Firefox).
+
 ## 0.3.0
 
 - Tests (Node's test runner, `npm test`) and GitHub Actions CI; `npm publish` runs the tests first.
