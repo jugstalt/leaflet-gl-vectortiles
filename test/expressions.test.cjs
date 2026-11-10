@@ -74,10 +74,75 @@ test('interpolate: linear, exponential, clamped at the ends', () => {
     assert.equal(ev(['interpolate', ['exponential', 1], ['zoom'], 0, 0, 10, 10], road, 5), 5, 'base 1 is linear');
 });
 
-test.todo('interpolate between colors (e.g. "#fff" → "#000"), as many OpenMapTiles styles use it');
-test.todo('more expressions: coalesce, let/var, upcase/downcase, length, at, +, -, *, /, min, max, format, number-format');
+test('interpolate between colors (hex, rgb, hsl, names) and arrays', () => {
+    const color = ['interpolate', ['linear'], ['zoom'], 10, '#000000', 20, '#ffffff'];
+    assert.equal(ev(color, road, 15), 'rgba(128,128,128,1)');
+    assert.equal(ev(['interpolate', ['linear'], ['zoom'], 0, 'rgba(255,0,0,0)', 10, 'rgba(255,0,0,1)'], road, 5), 'rgba(255,0,0,0.5)');
+    assert.equal(ev(['interpolate', ['linear'], ['zoom'], 0, 'hsl(0, 100%, 50%)', 10, 'blue'], road, 0), 'hsl(0, 100%, 50%)', 'at a stop: the stop value');
+    assert.equal(ev(['interpolate', ['linear'], ['zoom'], 0, 'hsl(120, 100%, 50%)', 10, 'black'], road, 5), 'rgba(0,128,0,1)');
+    assert.equal(ev(['interpolate', ['linear'], ['zoom'], 0, '#fff', 10, '#00000080'], road, 10), '#00000080');
+    assert.deepEqual(plain(ev(['interpolate', ['linear'], ['zoom'], 0, ['literal', [0, 0]], 10, ['literal', [4, 8]]], road, 5)), [2, 4]);
+    assert.equal(ev({ stops: [[10, '#000'], [20, '#fff']] }, road, 15), 'rgba(128,128,128,1)', 'legacy function with colors');
+    assert.equal(shared.parseColor('nonsense'), null);
+});
+
+test('interpolate: cubic-bezier easing', () => {
+    const ramp = ['interpolate', ['cubic-bezier', 0.42, 0, 0.58, 1], ['zoom'], 0, 0, 10, 100];
+    assert.ok(Math.abs(ev(ramp, road, 5) - 50) < 0.01, 'symmetric ease-in-out: half way at the middle');
+    assert.ok(ev(ramp, road, 2) < 20, 'slow start');
+});
+
+test('coalesce, typeof, type conversions and assertions', () => {
+    assert.equal(ev(['coalesce', ['get', 'name_en'], ['get', 'name']], road, 0), 'Ringstraße');
+    assert.equal(ev(['coalesce', ['get', 'a'], ['get', 'b']], road, 0), null);
+    assert.equal(ev(['typeof', ['get', 'lanes']], road, 0), 'number');
+    assert.equal(ev(['typeof', ['get', 'missing']], road, 0), 'null');
+    assert.equal(ev(['to-boolean', ['get', 'name']], road, 0), true);
+    assert.equal(ev(['to-number', ['get', 'missing'], '7'], road, 0), 7);
+    assert.equal(ev(['string', ['get', 'lanes'], 'fallback'], road, 0), 'fallback');
+    assert.equal(ev(['number', ['get', 'lanes'], 0], road, 0), 4);
+    assert.equal(ev(['to-color', 'nonsense', '#123'], road, 0), '#123');
+});
+
+test('strings: upcase, downcase, length, slice, in, index-of, format, number-format, image', () => {
+    assert.equal(ev(['upcase', ['get', 'ref']], road, 0), 'B1');
+    assert.equal(ev(['downcase', ['get', 'name']], road, 0), 'ringstraße');
+    assert.equal(ev(['length', ['get', 'name']], road, 0), 10);
+    assert.equal(ev(['slice', ['get', 'name'], 0, 4], road, 0), 'Ring');
+    assert.equal(ev(['in', 'straße', ['get', 'name']], road, 0), true, 'substring');
+    assert.equal(ev(['index-of', 'straße', ['get', 'name']], road, 0), 4);
+    assert.equal(ev(['format', ['get', 'ref'], { 'font-scale': 0.8 }, ' ', {}, ['get', 'name'], { 'text-font': ['literal', ['Bold']] }], road, 0), 'B1 Ringstraße');
+    assert.equal(ev(['number-format', 3.14159, { 'max-fraction-digits': 2, locale: 'en' }], road, 0), '3.14');
+    assert.equal(ev(['image', 'icon-bus'], road, 0), 'icon-bus');
+});
+
+test('math', () => {
+    assert.equal(ev(['+', 1, 2, 3], road, 0), 6);
+    assert.equal(ev(['-', 10, ['get', 'lanes']], road, 0), 6);
+    assert.equal(ev(['-', 5], road, 0), -5);
+    assert.equal(ev(['*', ['get', 'lanes'], 2.5], road, 0), 10);
+    assert.equal(ev(['/', 9, 2], road, 0), 4.5);
+    assert.equal(ev(['%', ['get', 'lanes'], 3], road, 0), 1);
+    assert.equal(ev(['^', 2, 10], road, 0), 1024);
+    assert.equal(ev(['min', 3, 1, 2], road, 0), 1);
+    assert.equal(ev(['max', 3, 1, 2], road, 0), 3);
+    assert.equal(ev(['round', 2.5], road, 0), 3);
+    assert.equal(ev(['floor', ['zoom']], road, 12.7), 12);
+    assert.equal(ev(['abs', -2], road, 0), 2);
+    assert.equal(ev(['sqrt', 16], road, 0), 4);
+});
+
+test('let / var, id, properties, at', () => {
+    assert.equal(ev(['let', 'w', ['*', ['get', 'lanes'], 2], ['+', ['var', 'w'], 1]], road, 0), 9);
+    assert.equal(ev(['let', 'a', 1, ['let', 'b', 2, ['+', ['var', 'a'], ['var', 'b']]]], road, 0), 3, 'nested scopes');
+    assert.equal(ev(['var', 'unknown'], road, 0), null);
+    assert.equal(ev(['id'], road, 0), 42);
+    assert.equal(ev(['get', 'name', ['properties']], road, 0), 'Ringstraße');
+    assert.equal(ev(['at', 1, ['literal', ['a', 'b', 'c']]], road, 0), 'b');
+});
 
 test('legacy functions (stops)', () => {
+    assert.equal(ev({ type: 'identity', property: 'class' }, road, 0), 'primary', 'identity without stops');
     assert.equal(ev({ stops: [[10, 1], [20, 11]] }, road, 15), 6, 'linear');
     assert.equal(ev({ base: 2, stops: [[10, 0], [12, 3]] }, road, 11), 1, 'exponential');
     assert.equal(ev({ stops: [[10, 'thin'], [15, 'wide']] }, road, 12), 'thin', 'non-numeric: steps');

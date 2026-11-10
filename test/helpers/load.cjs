@@ -21,7 +21,8 @@ function leafletStub() {
 
 function load(file = 'leaflet-gl-vectortiles.js') {
     const L = leafletStub();
-    const context = { window: { L }, console, URL, TextDecoder, DataView, Uint8Array, ArrayBuffer };
+    const quiet = Object.assign({}, console, { warn() {} });   // expected warnings (a source that fails) stay out of the output
+    const context = { window: { L, location: { href: 'https://example.test/app/' }, console: quiet }, console: quiet, URL, TextDecoder, DataView, Uint8Array, ArrayBuffer };
     vm.createContext(context);
     vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context, { filename: file });
     const plugin = L.GLVectorTiles;

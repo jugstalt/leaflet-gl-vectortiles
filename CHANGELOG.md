@@ -3,6 +3,17 @@
 ## Unreleased
 
 - Tests (Node's test runner, `npm test`) and GitHub Actions CI; `npm publish` runs the tests first.
+- Many more expressions: `coalesce`, `let`/`var`, `typeof`, `to-boolean`, `to-color`, type assertions, `upcase`,
+  `downcase`, `length`, `slice`, `index-of`, `in` on strings, `format`, `number-format`, `image`, math
+  (`+ - * / % ^`, `min`, `max`, `round`, …), `properties`, `id`; `interpolate` between colors and arrays and with
+  `cubic-bezier` (also legacy functions with color stops).
+- Sprites as a list (style spec v8: `[{ id, url }]`, icons named `id:icon`), put into one atlas.
+- `fill-extrusion` layers (3D buildings) are drawn as flat fills.
+- Labels are placed as in GL: the higher style layer first, within a layer by `symbol-sort-key`; `icon-opacity`.
+- Style URLs without `.json` (e.g. OpenFreeMap): when `{url}/style.json` fails, the URL itself is loaded as style. A
+  TileJSON given as style gets a clear error.
+- A source that can't be loaded no longer stops the style: an `error` event (`e.source`), the other sources are drawn.
+- Example page: presets for basemap.de, OpenFreeMap (Liberty, Positron) and VersaTiles.
 - Fix: legacy identity functions (`{ "type": "identity", "property": "…" }`, without stops) were not evaluated.
 
 ## 0.2.0

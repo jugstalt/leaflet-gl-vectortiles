@@ -278,6 +278,10 @@
     vermv:    { label: 'BEV cadastre – survey (WebMercator)', urls: [`${BEV}/kataster/style_vermv.json`, `${BEV}/symbole/style_vermv.json`], osm: true, view: [47.8095, 13.0550, 17] },
     gis:      { label: 'BEV cadastre – GIS (WebMercator)', urls: [`${BEV}/kataster/style_gis.json`, `${BEV}/symbole/style_gis.json`], osm: true, view: [47.8095, 13.0550, 17] },
     basic:    { label: 'BEV cadastre – basic (WebMercator)', urls: [`${BEV}/kataster/style_basic.json`], osm: true, view: [47.8095, 13.0550, 17] },
+    basemapde: { label: 'basemap.de – Germany (WebMercator)', urls: ['https://sgx.geodatenzentrum.de/gdz_basemapde_vektor/styles/bm_web_col.json'], view: [52.5163, 13.3777, 15] },
+    liberty:  { label: 'OpenFreeMap Liberty – world (WebMercator)', urls: ['https://tiles.openfreemap.org/styles/liberty'], view: [48.2082, 16.3738, 15] },
+    positron: { label: 'OpenFreeMap Positron – world (WebMercator)', urls: ['https://tiles.openfreemap.org/styles/positron'], view: [48.2082, 16.3738, 15] },
+    versatiles: { label: 'VersaTiles Colorful – world (WebMercator)', urls: ['https://tiles.versatiles.org/assets/styles/colorful/style.json'], view: [48.2082, 16.3738, 16] },
     // only reachable on the developer's machine:
     // gview:    { label: 'gView (local, EPSG:31256)', urls: ['https://localhost:44331/vtc/sqlite/basis-sqlite'] },
     custom:   { label: 'Custom URL…' }
@@ -320,8 +324,11 @@
     const base = urls[0];
     const epsgArg = $('epsg').value.trim();
 
-    const isStyleUrl = /\.json(\?|$)/i.test(base);
-    const style = await (await fetch(isStyleUrl ? base : `${base}/style.json${epsgArg ? '?epsg=' + epsgArg : ''}`)).json();
+    // a style URL (…/style.json), a gView vtc base ({url}/style.json) or a style URL without .json (OpenFreeMap)
+    const fetchJson = async url => { const r = await fetch(url); if (!r.ok) throw new Error(r.status + ' ' + url); return r.json(); };
+    const style = /\.json(\?|$)/i.test(base) ? await fetchJson(base)
+      : await fetchJson(`${base}/style.json${epsgArg ? '?epsg=' + epsgArg : ''}`).catch(() => fetchJson(base));
+    if (!Array.isArray(style.layers)) throw new Error(style.tiles ? 'a TileJSON, not a GL style' : 'not a GL style');
     const grid = (style.metadata || {})['gview:grid'];
 
     let crs;

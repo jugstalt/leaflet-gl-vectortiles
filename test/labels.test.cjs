@@ -70,6 +70,17 @@ test('which symbol layers are drawn into the tile images (option iconsInTiles)',
     assert.deepEqual(style.layers.filter(l => l['gview:inTile']).map(l => l.id), []);
 });
 
+test('fill-extrusion (3D buildings) becomes a flat fill with its color and opacity', () => {
+    const layer = Object.create(plugin.prototype);
+    layer.options = {};
+    const style = { layers: [{ id: 'building-3d', type: 'fill-extrusion', paint: {
+        'fill-extrusion-color': 'hsl(35,8%,85%)', 'fill-extrusion-opacity': 0.8, 'fill-extrusion-height': ['get', 'render_height']
+    } }] };
+    layer._markIconsInTiles(style);
+    assert.equal(style.layers[0].type, 'fill');
+    assert.deepEqual(plain(style.layers[0].paint), { 'fill-color': 'hsl(35,8%,85%)', 'fill-opacity': 0.8 });
+});
+
 // glyphs of 10 px each
 const measure = text => Array.from(text).length * 10;
 

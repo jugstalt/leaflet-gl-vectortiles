@@ -19,12 +19,17 @@ levels. Protobuf and MVT are decoded in the plugin; rendering runs in a web work
   URLs. 404/204 tiles count as empty. gView vector tile caches in any grid (`gview:grid` in the style).
 - **Styles:** fill (color, opacity, outline, pattern), line (width, color, opacity, dashes, join, cap), circle,
   symbol (icons from the sprite, SDF icons tinted with `icon-color`, text with font, size, halo, anchor, offset,
-  rotation, letter spacing, transform, `text-max-width` wrapping), background.
-  - Expressions: `get`, `has`, comparisons, `!`, `all`, `any`, `in`, `to-string`, `to-number`, `concat`,
-    `geometry-type`, `interpolate`, `match`, `case`, `step`, `literal`, `zoom`.
-  - Legacy styles: functions (`stops`), filters (`["==", "field", value]`), `{field}` tokens.
-- **Labels:** collision handling ("declutter") across tiles. Icon and text of a symbol are placed together, with
-  `*-optional` and `*-ignore-placement`. Line labels follow the line glyph by glyph (upright, `text-max-angle`),
+  rotation, letter spacing, transform, `text-max-width` wrapping), background. `fill-extrusion` (3D buildings) is
+  drawn flat, as seen from above. Sprites as a URL or as a list (`[{ id, url }]`, icons `id:name`).
+  - Expressions: data (`get`, `has`, `properties`, `id`, `geometry-type`, `zoom`), decisions (`match`, `case`,
+    `coalesce`, comparisons, `all`, `any`, `!`, `in`), ramps (`step`, `interpolate` linear/exponential/cubic-bezier,
+    also between colors), types (`typeof`, `to-string`, `to-number`, `to-boolean`, `to-color`, assertions), strings
+    (`concat`, `upcase`, `downcase`, `length`, `slice`, `index-of`, `format`, `number-format`), math (`+ - * / % ^`,
+    `min`, `max`, `round`, `floor`, `ceil`, `abs`, `sqrt`, `ln`, …), `let`/`var`, `literal`, `image`.
+  - Legacy styles: functions (`stops`, `identity`), filters (`["==", "field", value]`), `{field}` tokens.
+  - Tested with basemap.at, basemap.de, the BEV cadastre, OpenFreeMap and VersaTiles.
+- **Labels:** collision handling ("declutter") across tiles, the higher style layer first (as GL), within a layer by
+  `symbol-sort-key`. Icon and text of a symbol are placed together, with `*-optional` and `*-ignore-placement`. Line labels follow the line glyph by glyph (upright, `text-max-angle`),
   repeated with `symbol-spacing`.
 - **Zoom levels:** classic sources load the tiles of `floor(zoom)` like GL clients. Sources with their own grid
   use the nearest level. Beyond the last level the tiles are overzoomed, and while a level loads, coarser tiles are
@@ -41,8 +46,8 @@ levels. Protobuf and MVT are decoded in the plugin; rendering runs in a web work
     and for styles with several sources, everything runs on the main thread, rendering in small portions per
     frame.
 
-**Try it:** [example page](https://jugstalt.github.io/leaflet-gl-vectortiles/examples/) with basemap.at and the
-Austrian cadastre (BEV).
+**Try it:** [example page](https://jugstalt.github.io/leaflet-gl-vectortiles/examples/) with basemap.at, the
+Austrian cadastre (BEV), basemap.de, OpenFreeMap and VersaTiles.
 
 ## Usage
 
@@ -98,8 +103,9 @@ const map = L.map('map', { crs, maxZoom: 9 });
 L.glVectorTiles('https://myserver/gview/vtc/myfolder/myservice').addTo(map);
 ```
 
-A URL ending in `.json` is a style URL; anything else is the `vtc` base of a gView service. For gView services the
-plugin loads `{url}/style.json?epsg={EPSG of the map}`, with the EPSG code taken from the map's `crs.code`.
+A URL ending in `.json` is a style URL; anything else is first taken as the `vtc` base of a gView service: the
+plugin loads `{url}/style.json?epsg={EPSG of the map}`, with the EPSG code taken from the map's `crs.code`. If that
+fails, the URL itself is loaded as a style (style URLs without `.json`, e.g. `https://tiles.openfreemap.org/styles/liberty`).
 
 A map whose zoom levels are exactly the cache levels (plus 3 overzoom levels):
 
@@ -225,15 +231,17 @@ zoom (map option `smoothWheelZoom`) is off by default.
   client, so WebMercator tiles can't be shown in a map in another projection.
 - **Rendering:** Canvas 2D, not WebGL. Complex styles render well, but a new zoom step takes longer to fill in than
   in MapLibre. Labels are placed on the main thread on every redraw.
-- **Not supported:** `line-offset`, `*-translate`, `fill-extrusion`, `heatmap`, `hillshade` and `raster` layers,
-  `feature-state`.
+- **Not supported:** `line-offset`, `*-translate`, `text-variable-anchor`, `icon-text-fit`, `heatmap`, `hillshade`
+  and `raster` layers, `geojson` and `raster` sources, `feature-state` (always null). `fill-extrusion` is drawn flat;
+  `format` joins its sections (no font or scale per section). A source that can't be loaded is left out (`error`
+  event), the others are drawn.
 - **Fonts:** CSS fonts are used. `text-font` "Arial Bold" becomes `bold … "Arial"`. Glyph PBFs of the style are not
   used.
 
 ## Example
 
 `examples/index.html` ([online](https://jugstalt.github.io/leaflet-gl-vectortiles/examples/)) loads a GL style URL
-or a gView service, with presets for basemap.at and the BEV cadastre. For a gView service it builds the map's CRS
+or a gView service, with presets for basemap.at, the BEV cadastre, basemap.de, OpenFreeMap and VersaTiles. For a gView service it builds the map's CRS
 from the cache grid. It lists the style layers as themes to switch. Locally: serve the repository folder over HTTP,
 e.g. `python -m http.server`, and open `/examples/` (`/examples/?min` uses the minified build of `npm run build`).
 

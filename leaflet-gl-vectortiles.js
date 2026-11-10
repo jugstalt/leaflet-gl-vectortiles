@@ -184,25 +184,117 @@
         }
 
         // ------------------------------------------------------------------------------------------
-        // GL style expressions (the subset gView generates, plus a few common ones)
+        // GL style expressions
         // ------------------------------------------------------------------------------------------
 
-        function evaluate(expr, feature, zoom) {
+        // colors: CSS color strings ↔ [r, g, b, a] (for interpolating colors)
+        var NAMED_COLORS = {
+            black: [0, 0, 0, 1], white: [255, 255, 255, 1], red: [255, 0, 0, 1], green: [0, 128, 0, 1], blue: [0, 0, 255, 1],
+            yellow: [255, 255, 0, 1], orange: [255, 165, 0, 1], purple: [128, 0, 128, 1], gray: [128, 128, 128, 1],
+            grey: [128, 128, 128, 1], silver: [192, 192, 192, 1], maroon: [128, 0, 0, 1], navy: [0, 0, 128, 1],
+            teal: [0, 128, 128, 1], olive: [128, 128, 0, 1], lime: [0, 255, 0, 1], aqua: [0, 255, 255, 1], cyan: [0, 255, 255, 1],
+            fuchsia: [255, 0, 255, 1], magenta: [255, 0, 255, 1], brown: [165, 42, 42, 1], pink: [255, 192, 203, 1],
+            transparent: [0, 0, 0, 0]
+        };
+
+        function hslToRgb(h, s, l) {
+            h = ((h % 360) + 360) % 360 / 360; s /= 100; l /= 100;
+            var q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
+            var c = function (t) {
+                if (t < 0) t += 1;
+                if (t > 1) t -= 1;
+                return t < 1 / 6 ? p + (q - p) * 6 * t : t < 1 / 2 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p;
+            };
+            return [c(h + 1 / 3) * 255, c(h) * 255, c(h - 1 / 3) * 255];
+        }
+
+        function parseColor(value) {
+            if (typeof value !== 'string') return null;
+            var s = value.trim().toLowerCase();
+            if (NAMED_COLORS[s]) return NAMED_COLORS[s].slice();
+            var m = /^#([0-9a-f]{3,8})$/.exec(s);
+            if (m) {
+                var hex = m[1];
+                if (hex.length === 3 || hex.length === 4) hex = hex.split('').map(function (ch) { return ch + ch; }).join('');
+                if (hex.length !== 6 && hex.length !== 8) return null;
+                var n = function (i) { return parseInt(hex.substr(i, 2), 16); };
+                return [n(0), n(2), n(4), hex.length === 8 ? n(6) / 255 : 1];
+            }
+            m = /^(rgba?|hsla?)\(([^)]+)\)$/.exec(s);
+            if (!m) return null;
+            var parts = m[2].split(/[\s,\/]+/).filter(Boolean).map(function (p) {
+                return p.slice(-1) === '%' ? { v: parseFloat(p), pct: true } : { v: parseFloat(p), pct: false };
+            });
+            if (parts.length < 3 || parts.some(function (p) { return isNaN(p.v); })) return null;
+            var alpha = parts.length > 3 ? (parts[3].pct ? parts[3].v / 100 : parts[3].v) : 1;
+            if (m[1].charAt(0) === 'h') return hslToRgb(parts[0].v, parts[1].v, parts[2].v).concat([alpha]);
+            return parts.slice(0, 3).map(function (p) { return p.pct ? p.v * 2.55 : p.v; }).concat([alpha]);
+        }
+
+        function formatColor(c) {
+            var r = function (v) { return Math.round(Math.max(0, Math.min(255, v))); };
+            return 'rgba(' + r(c[0]) + ',' + r(c[1]) + ',' + r(c[2]) + ',' + Math.round(Math.max(0, Math.min(1, c[3])) * 1000) / 1000 + ')';
+        }
+
+        // between two output values: numbers, colors or arrays of numbers
+        function interpolateValue(a, b, t) {
+            if (typeof a === 'number' && typeof b === 'number') return a + t * (b - a);
+            var ca = parseColor(a), cb = parseColor(b);
+            if (ca && cb) return formatColor(ca.map(function (v, i) { return v + t * (cb[i] - v); }));
+            if (Array.isArray(a) && Array.isArray(b) && a.length === b.length) {
+                return a.map(function (v, i) { return typeof v === 'number' ? v + t * (b[i] - v) : (t < 0.5 ? v : b[i]); });
+            }
+            return t < 0.5 ? a : b;
+        }
+
+        // cubic-bezier(x1, y1, x2, y2) easing at x in [0, 1]
+        function cubicBezier(x1, y1, x2, y2, x) {
+            var bez = function (p1, p2, t) { return 3 * (1 - t) * (1 - t) * t * p1 + 3 * (1 - t) * t * t * p2 + t * t * t; };
+            var lo = 0, hi = 1, t = x;
+            for (var i = 0; i < 30; i++) {
+                var bx = bez(x1, x2, t);
+                if (Math.abs(bx - x) < 1e-6) break;
+                if (bx < x) lo = t; else hi = t;
+                t = (lo + hi) / 2;
+            }
+            return bez(y1, y2, t);
+        }
+
+        function typeOf(v) {
+            return v === null || v === undefined ? 'null' : Array.isArray(v) ? 'array' : typeof v === 'object' ? 'object' : typeof v;
+        }
+
+        function evaluate(expr, feature, zoom, scope) {
             if (!Array.isArray(expr)) return expr;
 
             var op = expr[0], props = feature ? feature.properties : {};
-            var arg = function (i) { return evaluate(expr[i], feature, zoom); };
+            var arg = function (i) { return evaluate(expr[i], feature, zoom, scope); };
+            var num = function (i) { var v = Number(arg(i)); return isNaN(v) ? 0 : v; };
 
             switch (op) {
-                case 'get': return props[expr[1]] === undefined ? null : props[expr[1]];
-                case 'has': return expr[1] in props;
-                case '!has': return !(expr[1] in props);
+                case 'get':
+                    if (expr.length > 2) { var obj = arg(2); return obj && obj[arg(1)] !== undefined ? obj[arg(1)] : null; }
+                    var name = arg(1);
+                    return props[name] === undefined ? null : props[name];
+                case 'has': return arg(1) in props;
+                case '!has': return !(arg(1) in props);
+                case 'properties': return props;
+                case 'id': return feature && feature.id !== undefined ? feature.id : null;
+                case 'feature-state': return null;   // no feature state on a background map
                 case 'literal': return expr[1];
                 case 'zoom': return zoom;
                 case 'geometry-type': return feature ? feature.type : null;
+                case 'let':
+                    var inner = Object.create(scope || null);
+                    for (var lv = 1; lv + 1 < expr.length - 1; lv += 2) inner[expr[lv]] = evaluate(expr[lv + 1], feature, zoom, scope);
+                    return evaluate(expr[expr.length - 1], feature, zoom, inner);
+                case 'var': return scope && scope[expr[1]] !== undefined ? scope[expr[1]] : null;
+
+                // logic, comparison
                 case '!': return !arg(1);
                 case 'all': for (var a = 1; a < expr.length; a++) if (!arg(a)) return false; return true;
                 case 'any': for (var b = 1; b < expr.length; b++) if (arg(b)) return true; return false;
+                case 'none': for (var nn = 1; nn < expr.length; nn++) if (arg(nn)) return false; return true;
                 case '==': return arg(1) === arg(2);
                 case '!=': return arg(1) !== arg(2);
                 case '>': return arg(1) > arg(2);
@@ -210,18 +302,92 @@
                 case '<': return arg(1) < arg(2);
                 case '<=': return arg(1) <= arg(2);
                 case 'in':
-                    var haystack = arg(2);
-                    return Array.isArray(haystack) ? haystack.indexOf(arg(1)) >= 0 : false;
+                    var needle = arg(1), haystack = arg(2);
+                    if (typeof haystack === 'string') return needle !== null && haystack.indexOf(String(needle)) >= 0;
+                    return Array.isArray(haystack) ? haystack.indexOf(needle) >= 0 : false;
+                case 'index-of':
+                    var hs = arg(2), found = hs === null || hs === undefined ? -1 : hs.indexOf(arg(1));
+                    return found;
+                case 'coalesce':
+                    for (var co = 1; co < expr.length; co++) { var cv = arg(co); if (cv !== null && cv !== undefined) return cv; }
+                    return null;
+
+                // types
+                case 'typeof': return typeOf(arg(1));
                 case 'to-string':
                     var s = arg(1);
                     return s === null || s === undefined ? '' : String(s);
                 case 'to-number':
-                    var n = Number(arg(1));
-                    return isNaN(n) ? 0 : n;
+                    for (var tn = 1; tn < expr.length; tn++) { var nv = Number(arg(tn)); if (arg(tn) !== null && !isNaN(nv)) return nv; }
+                    return 0;
+                case 'to-boolean': return !!arg(1);
+                case 'to-color':
+                    for (var tc = 1; tc < expr.length; tc++) { var colorValue = arg(tc); if (parseColor(colorValue)) return colorValue; }
+                    return null;
+                case 'string': case 'number': case 'boolean': case 'object': case 'array':
+                    // type assertions: the first value of the type (else the last one)
+                    for (var ta = 1; ta < expr.length; ta++) {
+                        var tv = arg(ta);
+                        if (typeOf(tv) === op || (op === 'array' && Array.isArray(tv))) return tv;
+                    }
+                    return arg(expr.length - 1);
+
+                // strings
                 case 'concat':
                     var text = '';
                     for (var c = 1; c < expr.length; c++) { var v = arg(c); text += v === null || v === undefined ? '' : String(v); }
                     return text;
+                case 'upcase': return String(arg(1) === null ? '' : arg(1)).toUpperCase();
+                case 'downcase': return String(arg(1) === null ? '' : arg(1)).toLowerCase();
+                case 'length': var lenValue = arg(1); return lenValue === null || lenValue === undefined ? 0 : lenValue.length;
+                case 'slice':
+                    var sliced = arg(1);
+                    return sliced === null || sliced === undefined ? null : sliced.slice(num(2), expr.length > 3 ? num(3) : undefined);
+                case 'at': var atValue = arg(2); return Array.isArray(atValue) ? (atValue[num(1)] === undefined ? null : atValue[num(1)]) : null;
+                case 'format':
+                    // formatted text: the sections joined (font and scale of sections are not supported)
+                    var formatted = '';
+                    for (var f = 1; f < expr.length; f++) {
+                        if (expr[f] && typeof expr[f] === 'object' && !Array.isArray(expr[f])) continue;   // section options
+                        var fv = arg(f);
+                        formatted += fv === null || fv === undefined ? '' : String(fv);
+                    }
+                    return formatted;
+                case 'number-format':
+                    var nf = num(1), opts = expr[2] || {};
+                    var min = opts['min-fraction-digits'], max = opts['max-fraction-digits'];
+                    try {
+                        return nf.toLocaleString(opts.locale ? evaluate(opts.locale, feature, zoom, scope) : undefined, {
+                            minimumFractionDigits: min, maximumFractionDigits: max !== undefined ? max : Math.max(min || 0, 3)
+                        });
+                    } catch (e) { return String(nf); }
+                case 'image': return arg(1);
+                case 'resolved-locale': return 'en';
+
+                // math
+                case '+': var sum = 0; for (var pl = 1; pl < expr.length; pl++) sum += num(pl); return sum;
+                case '*': var product = 1; for (var ml = 1; ml < expr.length; ml++) product *= num(ml); return product;
+                case '-': return expr.length > 2 ? num(1) - num(2) : -num(1);
+                case '/': return num(1) / num(2);
+                case '%': return num(1) % num(2);
+                case '^': return Math.pow(num(1), num(2));
+                case 'min': var mn = Infinity; for (var mi = 1; mi < expr.length; mi++) mn = Math.min(mn, num(mi)); return mn;
+                case 'max': var mx = -Infinity; for (var ma = 1; ma < expr.length; ma++) mx = Math.max(mx, num(ma)); return mx;
+                case 'abs': return Math.abs(num(1));
+                case 'round': return Math.round(num(1));
+                case 'floor': return Math.floor(num(1));
+                case 'ceil': return Math.ceil(num(1));
+                case 'sqrt': return Math.sqrt(num(1));
+                case 'ln': return Math.log(num(1));
+                case 'log10': return Math.log(num(1)) / Math.LN10;
+                case 'log2': return Math.log(num(1)) / Math.LN2;
+                case 'sin': return Math.sin(num(1));
+                case 'cos': return Math.cos(num(1));
+                case 'tan': return Math.tan(num(1));
+                case 'pi': return Math.PI;
+                case 'e': return Math.E;
+
+                // decisions, ramps
                 case 'match':
                     var input = arg(1);
                     for (var m = 2; m + 1 < expr.length; m += 2) {
@@ -238,7 +404,7 @@
                         if (stepInput >= expr[st]) result = arg(st + 1); else break;
                     }
                     return result;
-                case 'interpolate':
+                case 'interpolate': case 'interpolate-hcl': case 'interpolate-lab':
                     var x = arg(2), stops = [];
                     for (var p = 3; p + 1 < expr.length; p += 2) stops.push([expr[p], arg(p + 1)]);
                     if (!stops.length) return null;
@@ -246,12 +412,14 @@
                     if (x >= stops[stops.length - 1][0]) return stops[stops.length - 1][1];
                     for (var q = 0; q < stops.length - 1; q++) {
                         if (x >= stops[q][0] && x <= stops[q + 1][0]) {
-                            var t = (x - stops[q][0]) / (stops[q + 1][0] - stops[q][0]);
-                            if (expr[1] && expr[1][0] === 'exponential' && expr[1][1] !== 1) {
-                                var base = expr[1][1];
-                                t = (Math.pow(base, t * (stops[q + 1][0] - stops[q][0])) - 1) / (Math.pow(base, stops[q + 1][0] - stops[q][0]) - 1);
+                            var range = stops[q + 1][0] - stops[q][0], t = range ? (x - stops[q][0]) / range : 0;
+                            var type = expr[1] || ['linear'];
+                            if (type[0] === 'exponential' && type[1] !== 1) {
+                                t = (Math.pow(type[1], t * range) - 1) / (Math.pow(type[1], range) - 1);
+                            } else if (type[0] === 'cubic-bezier') {
+                                t = cubicBezier(type[1], type[2], type[3], type[4], t);
                             }
-                            return stops[q][1] + t * (stops[q + 1][1] - stops[q][1]);
+                            return interpolateValue(stops[q][1], stops[q + 1][1], t);
                         }
                     }
                     return stops[stops.length - 1][1];
@@ -277,7 +445,8 @@
                 return fn['default'];
             }
 
-            var numeric = typeof stops[0][1] === 'number';
+            // numbers and colors are interpolated, anything else steps
+            var numeric = typeof stops[0][1] === 'number' || !!parseColor(stops[0][1]);
             if (fn.type === 'interval' || !numeric || typeof input !== 'number') {
                 var result = stops[0][1];
                 for (var i = 0; i < stops.length; i++) { if (input >= key(stops[i])) result = stops[i][1]; else break; }
@@ -292,7 +461,7 @@
                 var z0 = key(stops[j]), z1 = key(stops[j + 1]);
                 if (input >= z0 && input <= z1) {
                     var t = base === 1 ? (input - z0) / (z1 - z0) : (Math.pow(base, input - z0) - 1) / (Math.pow(base, z1 - z0) - 1);
-                    return stops[j][1] + t * (stops[j + 1][1] - stops[j][1]);
+                    return interpolateValue(stops[j][1], stops[j + 1][1], t);
                 }
             }
             return stops[stops.length - 1][1];
@@ -770,7 +939,7 @@
         return {
             decodeTile: decodeTile, evaluate: evaluate, evaluateValue: evaluateValue, resolveTokens: resolveTokens,
             filterMatches: filterMatches, filterUsesZoom: filterUsesZoom, layerIsDataDriven: layerIsDataDriven,
-            addPath: addPath, makeCanvas: makeCanvas, symbolAnchors: symbolAnchors, iconInTile: iconInTile,
+            addPath: addPath, makeCanvas: makeCanvas, symbolAnchors: symbolAnchors, iconInTile: iconInTile, parseColor: parseColor,
             TileRenderer: TileRenderer
         };
     }
@@ -1388,8 +1557,31 @@
             var self = this;
             if (this._styleObject) styleUrl = window.location.href;   // relative URLs in a style object: to the page
 
-            return (this._styleObject ? Promise.resolve(this._styleObject) : this._fetchJson(styleUrl))
+            var loading;
+            if (this._styleObject) {
+                loading = Promise.resolve(this._styleObject);
+            } else if (this.options.style) {
+                loading = this._fetchJson(styleUrl);
+            } else {
+                // a gView vtc base: {url}/style.json; otherwise the URL may be a style itself without .json at its end
+                // (e.g. https://tiles.openfreemap.org/styles/liberty)
+                var direct = resolveUrl(this._url, window.location.href);
+                loading = this._fetchJson(styleUrl).catch(function (error) {
+                    return self._fetchJson(direct).then(function (style) {
+                        if (!style || !Array.isArray(style.layers)) throw error;
+                        styleUrl = direct;
+                        return style;
+                    }, function () { throw error; });
+                });
+            }
+
+            return loading
                 .then(function (style) {
+                    if (!style || !Array.isArray(style.layers)) {
+                        throw new Error(style && (style.tiles || style.tilejson || style.vector_layers)
+                            ? 'A TileJSON, not a GL style (no layers): ' + styleUrl
+                            : 'Not a GL style (no layers): ' + styleUrl);
+                    }
                     self._style = style;
                     self._markIconsInTiles(style);
                     self._renderer.setStyle(style);
@@ -1400,12 +1592,17 @@
 
                     return Promise.all(Object.keys(style.sources || {})
                         .filter(function (id) { return used[id] && style.sources[id].type === 'vector'; })
-                        .map(function (id) { return self._loadSource(id, style.sources[id], styleUrl, gviewGrid); }));
+                        .map(function (id) {
+                            // a source that can't be loaded: an error event, the other sources are drawn
+                            return self._loadSource(id, style.sources[id], styleUrl, gviewGrid).catch(function (error) {
+                                self.fire('error', { error: error, source: id });
+                                if (window.console) console.warn('leaflet-gl-vectortiles: source "' + id + '":', error);
+                            });
+                        }));
                 })
                 .then(function () {
                     self._updateAttribution();
-                    var sprite = self._style.sprite;
-                    return sprite && typeof sprite === 'string' ? self._loadSprite(resolveUrl(sprite, styleUrl)) : null;
+                    return self._loadSprite(self._style.sprite, styleUrl);
                 })
                 .then(function () { return self._startWorker(); })
                 .then(function () { self.fire('styleload', { style: self._style }); });
@@ -1481,20 +1678,54 @@
             });
         },
 
-        _loadSprite: function (spriteUrl) {
+        // the style's sprite: a URL, or (style spec v8) a list [{ id, url }] whose icons are named "id:icon" (the id
+        // "default" without prefix). Several sprites are put into one image (one atlas for the worker).
+        _loadSprite: function (sprite, styleUrl) {
+            var list = typeof sprite === 'string' ? [{ id: 'default', url: sprite }] : Array.isArray(sprite) ? sprite : [];
+            if (!list.length) return Promise.resolve();
             var ratio = this._ratio() > 1 ? 2 : 1, suffix = ratio === 2 ? '@2x' : '';
             var self = this;
-            return this._fetchJson(spriteUrl + suffix + '.json')
-                .then(function (index) {
-                    return new Promise(function (resolve) {
-                        var image = new Image();
-                        image.crossOrigin = 'anonymous';
-                        image.onload = function () { self._sprite = { index: index, image: image, pixelRatio: ratio }; self._renderer.setSprite(self._sprite); resolve(); };
-                        image.onerror = function () { resolve(); };   // draw without sprites
-                        image.src = spriteUrl + suffix + '.png';
+
+            var loadOne = function (entry) {
+                var url = resolveUrl(entry.url, styleUrl), parts = url.split('?'), query = parts[1] ? '?' + parts[1] : '';
+                return self._fetchJson(parts[0] + suffix + '.json' + query)
+                    .then(function (index) {
+                        return new Promise(function (resolve) {
+                            var image = new Image();
+                            image.crossOrigin = 'anonymous';
+                            image.onload = function () { resolve({ id: entry.id, index: index, image: image }); };
+                            image.onerror = function () { resolve(null); };
+                            image.src = parts[0] + suffix + '.png' + query;
+                        });
+                    })
+                    .catch(function () { return null; });   // without this sprite
+            };
+
+            return Promise.all(list.map(loadOne)).then(function (sprites) {
+                sprites = sprites.filter(Boolean);
+                if (!sprites.length) return;
+                var image = sprites[0].image, index = {};
+                if (sprites.length > 1) {
+                    // one atlas: the sprite images below each other
+                    var width = 0, height = 0;
+                    sprites.forEach(function (sp) { width = Math.max(width, sp.image.width); height += sp.image.height; });
+                    image = document.createElement('canvas');
+                    image.width = width;
+                    image.height = height;
+                    var ctx = image.getContext('2d'), y = 0;
+                    sprites.forEach(function (sp) { ctx.drawImage(sp.image, 0, y); sp.offset = y; y += sp.image.height; });
+                }
+                sprites.forEach(function (sp) {
+                    var prefix = sp.id === 'default' ? '' : sp.id + ':';
+                    Object.keys(sp.index).forEach(function (name) {
+                        var entry = L.extend({}, sp.index[name]);
+                        entry.y += sp.offset || 0;
+                        index[prefix + name] = entry;
                     });
-                })
-                .catch(function () { /* no sprites */ });
+                });
+                self._sprite = { index: index, image: image, pixelRatio: ratio };
+                self._renderer.setSprite(self._sprite);
+            });
         },
 
         _mapEpsg: function () {
@@ -1613,6 +1844,17 @@
 
         // icon layers that may overlap anything (icons only, icon-allow-overlap): drawn into the tile images
         _markIconsInTiles: function (style) {
+            // 3D buildings (fill-extrusion) seen from above: flat fills with their color and opacity
+            style.layers.forEach(function (l) {
+                if (l.type !== 'fill-extrusion') return;
+                var paint = l.paint || {};
+                l.type = 'fill';
+                l['gview:extrusion'] = true;
+                l.paint = { 'fill-color': paint['fill-extrusion-color'] !== undefined ? paint['fill-extrusion-color'] : '#000' };
+                if (paint['fill-extrusion-opacity'] !== undefined) l.paint['fill-opacity'] = paint['fill-extrusion-opacity'];
+                if (paint['fill-extrusion-pattern'] !== undefined) l.paint['fill-pattern'] = paint['fill-extrusion-pattern'];
+            });
+
             var on = this.options.iconsInTiles;
             style.layers.forEach(function (l) {
                 var layout = l.layout || {};
@@ -2195,7 +2437,7 @@
         _drawLayerTile: function (ctx, styleLayer, layerIndex, d, zoom, labels) {
             var self = this;
             this._renderer._drawLayerTile(ctx, styleLayer, layerIndex, d, zoom, labels ? function (feature, tx, ty) {
-                self._collectSymbol(labels, styleLayer, feature, zoom, tx, ty, d);
+                self._collectSymbol(labels, styleLayer, feature, zoom, tx, ty, d, layerIndex);
             } : null);
         },
 
@@ -2340,7 +2582,7 @@
 
         // ---------------------------------------------------------------- symbols (icons, labels)
 
-        _collectSymbol: function (labels, styleLayer, feature, zoom, tx, ty, drawable) {
+        _collectSymbol: function (labels, styleLayer, feature, zoom, tx, ty, drawable, layerIndex) {
             var placement = this._layout(styleLayer, 'symbol-placement', feature, zoom, 'point');
             var iconName = resolveTokens(this._layout(styleLayer, 'icon-image', feature, zoom, null), feature);
             var text = resolveTokens(this._layout(styleLayer, 'text-field', feature, zoom, null), feature);
@@ -2375,6 +2617,10 @@
                     iconRatio: iconEntry ? (iconEntry.pixelRatio || self._sprite.pixelRatio) : 1,
                     iconSize: self._layout(styleLayer, 'icon-size', feature, zoom, 1),
                     iconRotate: self._layout(styleLayer, 'icon-rotate', feature, zoom, 0) * Math.PI / 180,
+                    iconOpacity: self._paint(styleLayer, 'icon-opacity', feature, zoom, 1),
+                    // placement priority: higher style layers first (as GL), within a layer by symbol-sort-key
+                    layerIndex: layerIndex,
+                    sortKey: self._layout(styleLayer, 'symbol-sort-key', feature, zoom, 0),
                     iconOverlap: self._layout(styleLayer, 'icon-allow-overlap', feature, zoom, false),
                     iconOptional: self._layout(styleLayer, 'icon-optional', feature, zoom, false),
                     iconIgnorePlacement: self._layout(styleLayer, 'icon-ignore-placement', feature, zoom, false),
@@ -2465,8 +2711,16 @@
             labels.forEach(function (l) {
                 l.key = l.id + '@' + Math.round(l.x + origin.x) + ',' + Math.round(l.y + origin.y);
             });
-            var ordered = labels.filter(function (l) { return previous[l.key]; })
-                .concat(labels.filter(function (l) { return !previous[l.key]; }));
+            // placement order: labels shown before (stable while panning), then as GL: the higher style layer first,
+            // within a layer the lower symbol-sort-key first, else the order of the features
+            var order = new Map();
+            labels.forEach(function (l, i) { order.set(l, i); });
+            var ordered = labels.slice().sort(function (a, b) {
+                return (previous[b.key] ? 1 : 0) - (previous[a.key] ? 1 : 0) ||
+                    (b.layerIndex || 0) - (a.layerIndex || 0) ||
+                    (Number(a.sortKey) || 0) - (Number(b.sortKey) || 0) ||
+                    order.get(a) - order.get(b);
+            });
 
             var placed = [];
             ordered.forEach(function (l) {
@@ -2714,7 +2968,7 @@
                 if (alpha < 1) fading = true;
 
                 if (p.icon) {
-                    ctx.globalAlpha = alpha;
+                    ctx.globalAlpha = alpha * (l.iconOpacity === undefined ? 1 : l.iconOpacity);
                     place(x, y, l.angle + l.iconRotate);
                     ctx.drawImage(self._iconCanvas(l.icon), -p.icon.w / 2, -p.icon.h / 2, p.icon.w, p.icon.h);
                     ctx.globalAlpha = 1;

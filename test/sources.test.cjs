@@ -96,3 +96,61 @@ test('cssFont: GL font names to CSS fonts', () => {
     assert.equal(cssFont(['Arial Regular'], 13.333), '13.3px "Arial", sans-serif');
     assert.equal(cssFont(null, 10), '10px "Arial", sans-serif');
 });
+
+// _loadStyle without a map: fixed JSON answers, the rest of the loading stubbed
+function styleLayer(url, responses, options = {}) {
+    const layer = layerWith(responses);
+    layer.options = Object.assign({ iconsInTiles: true }, options);
+    layer._url = url;
+    layer._renderer = { setStyle() {}, setSprite() {} };
+    layer._loadSprite = () => Promise.resolve();
+    layer._startWorker = () => null;
+    layer._updateAttribution = () => {};
+    layer.events = [];
+    layer.fire = (type, data) => { layer.events.push({ type, data }); return layer; };
+    return layer;
+}
+
+const STYLE = {
+    version: 8,
+    sources: { v: { type: 'vector', tiles: ['tiles/{z}/{x}/{y}.pbf'] } },
+    layers: [{ id: 'l', type: 'line', source: 'v', 'source-layer': 'roads' }]
+};
+
+test('a style URL without .json at its end (OpenFreeMap): after {url}/style.json fails, the URL itself', async () => {
+    const layer = styleLayer('https://tiles.example/styles/liberty', { 'https://tiles.example/styles/liberty': STYLE });
+    await layer._loadStyle();
+    assert.deepEqual(layer.requested, ['https://tiles.example/styles/liberty/style.json', 'https://tiles.example/styles/liberty']);
+    assert.equal(layer._style.layers.length, 1);
+    assert.equal(layer._sources.v.tileUrl, 'https://tiles.example/styles/tiles/{z}/{x}/{y}.pbf', 'relative to the style URL');
+    assert.equal(layer.events.at(-1).type, 'styleload');
+});
+
+test('a gView vtc base: {url}/style.json', async () => {
+    const layer = styleLayer('https://gview.example/vtc/svc', { 'https://gview.example/vtc/svc/style.json': STYLE });
+    await layer._loadStyle();
+    assert.deepEqual(layer.requested, ['https://gview.example/vtc/svc/style.json']);
+});
+
+test('a TileJSON instead of a style: a clear error', async () => {
+    const layer = styleLayer('', { 'https://tiles.example/basemap.json': { tilejson: '2.2.0', tiles: ['x/{z}/{x}/{y}.mvt'] } },
+        { style: 'https://tiles.example/basemap.json' });
+    await assert.rejects(layer._loadStyle(), /A TileJSON, not a GL style/);
+});
+
+test('a source that cannot be loaded: error event, the other sources are loaded', async () => {
+    const style = {
+        version: 8,
+        sources: {
+            broken: { type: 'vector', url: 'https://tiles.example/missing.json' },
+            ok: { type: 'vector', tiles: ['https://tiles.example/{z}/{x}/{y}.pbf'] }
+        },
+        layers: [{ id: 'a', type: 'line', source: 'broken' }, { id: 'b', type: 'line', source: 'ok' }]
+    };
+    const layer = styleLayer('', { 'https://tiles.example/style.json': style }, { style: 'https://tiles.example/style.json' });
+    await layer._loadStyle();
+    assert.deepEqual(Object.keys(layer._sources), ['ok']);
+    const error = layer.events.find(e => e.type === 'error');
+    assert.equal(error.data.source, 'broken');
+    assert.equal(layer.events.at(-1).type, 'styleload');
+});
