@@ -24,7 +24,8 @@
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/proj4@2.12.1/dist/proj4.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/proj4leaflet@1.0.2/src/proj4leaflet.js"></script>
-  <script src="../leaflet-gl-vectortiles.js"></script>
+  <!-- ?min: the minified build (npm run build) -->
+  <script>document.write('<script src="../leaflet-gl-vectortiles' + (/[?&]min(=|&|$)/.test(location.search) ? '.min' : '') + '.js"><\/script>');</script>
 </head>
 <body>
 <div id="map"></div>

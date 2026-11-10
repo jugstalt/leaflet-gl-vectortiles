@@ -41,13 +41,31 @@ levels. Protobuf and MVT are decoded in the plugin; rendering runs in a web work
     and for styles with several sources, everything runs on the main thread, rendering in small portions per
     frame.
 
+**Try it:** [example page](https://jugstalt.github.io/leaflet-gl-vectortiles/examples/) with basemap.at and the
+Austrian cadastre (BEV).
+
 ## Usage
+
+From a CDN (minified build of the npm package):
 
 ```html
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="leaflet-gl-vectortiles.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@jugstalt/leaflet-gl-vectortiles@0.2.0/leaflet-gl-vectortiles.min.js"></script>
 ```
+
+With npm (`L.glVectorTiles` is added to Leaflet's `L`):
+
+```bash
+npm install leaflet @jugstalt/leaflet-gl-vectortiles
+```
+
+```js
+import L from 'leaflet';
+import '@jugstalt/leaflet-gl-vectortiles';
+```
+
+Or copy `leaflet-gl-vectortiles.js` (one file) into your project.
 
 ### Classic vector tiles (WebMercator)
 
@@ -214,8 +232,17 @@ zoom (map option `smoothWheelZoom`) is off by default.
 
 ## Example
 
-`examples/index.html` loads a GL style URL or a gView service. For a gView service it builds the map's CRS from the
-cache grid. Serve the repository folder over HTTP, e.g. `python -m http.server`, and open `/examples/`.
+`examples/index.html` ([online](https://jugstalt.github.io/leaflet-gl-vectortiles/examples/)) loads a GL style URL
+or a gView service, with presets for basemap.at and the BEV cadastre. For a gView service it builds the map's CRS
+from the cache grid. It lists the style layers as themes to switch. Locally: serve the repository folder over HTTP,
+e.g. `python -m http.server`, and open `/examples/` (`/examples/?min` uses the minified build of `npm run build`).
+
+## Build
+
+```bash
+npm install
+npm run build    # leaflet-gl-vectortiles.min.js and its source map
+```
 
 ## License
 

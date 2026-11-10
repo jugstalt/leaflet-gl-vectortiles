@@ -1,13 +1,22 @@
 {
-  "name": "leaflet-gl-vectortiles",
-  "version": "0.1.0",
+  "name": "@jugstalt/leaflet-gl-vectortiles",
+  "version": "0.2.0",
   "description": "Leaflet layer for Mapbox Vector Tiles with GL styles: classic WebMercator vector tiles (basemap.at, OpenMapTiles, ESRI) and vector tiles in any projection and grid (gView GIS). One file, no dependencies, rendering in a web worker.",
   "main": "leaflet-gl-vectortiles.js",
+  "unpkg": "leaflet-gl-vectortiles.min.js",
+  "jsdelivr": "leaflet-gl-vectortiles.min.js",
   "files": [
     "leaflet-gl-vectortiles.js",
+    "leaflet-gl-vectortiles.min.js",
+    "leaflet-gl-vectortiles.min.js.map",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
+  "scripts": {
+    "build": "terser leaflet-gl-vectortiles.js --compress --mangle --comments \"/^!/\" --source-map \"url='leaflet-gl-vectortiles.min.js.map'\" --output leaflet-gl-vectortiles.min.js",
+    "prepublishOnly": "npm run build"
+  },
   "keywords": [
     "leaflet",
     "leaflet-plugin",
@@ -22,6 +31,12 @@
   "peerDependencies": {
     "leaflet": "^1.9.0"
   },
+  "devDependencies": {
+    "terser": "^5.51.2"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/jugstalt/leaflet-gl-vectortiles.git"
@@ -29,6 +44,6 @@
   "bugs": {
     "url": "https://github.com/jugstalt/leaflet-gl-vectortiles/issues"
   },
-  "homepage": "https://github.com/jugstalt/leaflet-gl-vectortiles#readme",
+  "homepage": "https://jugstalt.github.io/leaflet-gl-vectortiles/examples/",
   "license": "Apache-2.0"
 }

@@ -1,3 +1,7 @@
 node_modules/
 .DS_Store
 *.log
+
+# build output (published to npm, attached to GitHub releases)
+leaflet-gl-vectortiles.min.js
+leaflet-gl-vectortiles.min.js.map

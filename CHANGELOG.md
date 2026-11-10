@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
+
+Published on npm as `@jugstalt/leaflet-gl-vectortiles`, with a minified build (`leaflet-gl-vectortiles.min.js`).
 
 **Breaking:** the event `load` now means "all visible tiles loaded and drawn" (as Leaflet's tile layers); the style
 is loaded at `styleload`.
