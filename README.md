@@ -242,7 +242,13 @@ e.g. `python -m http.server`, and open `/examples/` (`/examples/?min` uses the m
 ```bash
 npm install
 npm run build    # leaflet-gl-vectortiles.min.js and its source map
+npm test         # build, then the tests (Node's test runner, no browser needed)
 ```
+
+The tests (`test/`) load the plugin in Node with a minimal Leaflet stub and cover the parts that don't draw: the
+MVT decoder (with tiles encoded in the test), expressions, legacy functions and filters, source loading (TileJSON,
+ESRI, gView grids, attribution), symbol anchors, text along lines, and that the worker code is self-contained, also
+in the minified build. GitHub Actions runs them on every push.
 
 ## License
 

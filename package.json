@@ -15,7 +15,8 @@
   ],
   "scripts": {
     "build": "terser leaflet-gl-vectortiles.js --compress --mangle --comments \"/^!/\" --source-map \"url='leaflet-gl-vectortiles.min.js.map'\" --output leaflet-gl-vectortiles.min.js",
-    "prepublishOnly": "npm run build"
+    "test": "npm run build && node --test \"test/*.test.cjs\"",
+    "prepublishOnly": "npm test"
   },
   "keywords": [
     "leaflet",

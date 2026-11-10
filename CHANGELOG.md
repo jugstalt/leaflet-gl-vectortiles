@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Tests (Node's test runner, `npm test`) and GitHub Actions CI; `npm publish` runs the tests first.
+- Fix: legacy identity functions (`{ "type": "identity", "property": "…" }`, without stops) were not evaluated.
+
 ## 0.2.0
 
 Published on npm as `@jugstalt/leaflet-gl-vectortiles`, with a minified build (`leaflet-gl-vectortiles.min.js`).

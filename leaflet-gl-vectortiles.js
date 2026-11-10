@@ -299,7 +299,8 @@
         }
 
         function evaluateValue(value, feature, zoom) {
-            if (value && typeof value === 'object' && !Array.isArray(value) && value.stops) {
+            // legacy functions: with stops, or identity functions ({ type: 'identity', property })
+            if (value && typeof value === 'object' && !Array.isArray(value) && (value.stops || value.type === 'identity')) {
                 return evaluateFunction(value, feature, zoom);
             }
             return evaluate(value, feature, zoom);
@@ -2838,6 +2839,8 @@
     GLVectorTiles.decodeTile = decodeTile;
     GLVectorTiles.evaluate = evaluateValue;
     GLVectorTiles.shared = gvShared;
+    // for the tests (not a public API)
+    GLVectorTiles._internals = { resolveUrl: resolveUrl, placeAlongPath: placeAlongPath, cssFont: cssFont };
 
     L.GLVectorTiles = GLVectorTiles;
     L.glVectorTiles = function (url, options) {
