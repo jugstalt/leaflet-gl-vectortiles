@@ -27,16 +27,19 @@
 <div id="map"></div>
 <div id="panel">
   <strong>leaflet-gl-vectortiles</strong>
-  <label>GL style URL (…/style.json, …/root.json) or gView vtc service URL
-    <input id="url" type="text" value="https://mapsneu.wien.gv.at/basemapvectorneu/root.json">
+  <label>Service
+    <select id="preset" style="width:100%"></select>
   </label>
-  <div style="font-size:11px;opacity:.7">e.g. basemap.at: https://mapsneu.wien.gv.at/basemapvectorneu/root.json</div>
+  <label>GL style URL(s) (…/style.json, …/root.json) or gView vtc service URL – several URLs separated by spaces are drawn on top of each other
+    <textarea id="url" rows="3" style="width:100%;box-sizing:border-box;font-size:11px"></textarea>
+  </label>
   <label>EPSG (gView services; empty = first of the cache)
     <input id="epsg" type="text" value="">
   </label>
   <label>proj4 definition (empty = from epsg.io)
     <input id="proj4def" type="text" value="">
   </label>
+  <label><input id="osm" type="checkbox"> OpenStreetMap background (WebMercator only)</label>
   <label><input id="debug" type="checkbox"> show tile grid</label>
   <label><input id="declutter" type="checkbox" checked> declutter labels</label>
   <button id="load">Load</button>
@@ -50,18 +53,44 @@
   const status = msg => { $('status').textContent += msg + '\n'; };
   let map;
 
-  for (const id of ['url', 'epsg', 'proj4def']) {
+  // ready-made test services; "custom" keeps what is typed into the URL field
+  const BEV = 'https://kataster.bev.gv.at/at.gv.bev.kataster/styles_kataster';
+  const presets = {
+    basemap:  { label: 'basemap.at (WebMercator)', urls: ['https://mapsneu.wien.gv.at/basemapvectorneu/root.json'] },
+    vermv:    { label: 'BEV Kataster – Vermessung (WebMercator)', urls: [`${BEV}/kataster/style_vermv.json`, `${BEV}/symbole/style_vermv.json`], osm: true, view: [47.6, 13.6, 8] },
+    gis:      { label: 'BEV Kataster – GIS (WebMercator)', urls: [`${BEV}/kataster/style_gis.json`, `${BEV}/symbole/style_gis.json`], osm: true, view: [47.6, 13.6, 8] },
+    basic:    { label: 'BEV Kataster – Basic (WebMercator)', urls: [`${BEV}/kataster/style_basic.json`], osm: true, view: [47.6, 13.6, 8] },
+    // only reachable on the developer's machine:
+    // gview:    { label: 'gView (local, EPSG:31256)', urls: ['https://localhost:44331/vtc/sqlite/basis-sqlite'] },
+    custom:   { label: 'custom URL' }
+  };
+  for (const [k, p] of Object.entries(presets)) $('preset').add(new Option(p.label, k));
+  $('preset').addEventListener('change', () => {
+    const p = presets[$('preset').value];
+    if (p.urls) { $('url').value = p.urls.join('\n'); $('epsg').value = ''; }
+    if (p.osm !== undefined || p.urls) $('osm').checked = !!p.osm;
+  });
+  $('url').addEventListener('input', () => { $('preset').value = 'custom'; });
+
+  for (const id of ['preset', 'url', 'epsg', 'proj4def']) {
     try { const v = localStorage.getItem('glvt-' + id); if (v !== null) $(id).value = v; } catch { }
   }
+  try { $('osm').checked = localStorage.getItem('glvt-osm') === '1'; } catch { }
+  if (!presets[$('preset').value]) $('preset').value = 'basemap';
+  if (!$('url').value.trim()) $('preset').dispatchEvent(new Event('change'));
 
   async function load() {
     $('status').textContent = '';
-    for (const id of ['url', 'epsg', 'proj4def']) {
+    for (const id of ['preset', 'url', 'epsg', 'proj4def']) {
       try { localStorage.setItem('glvt-' + id, $(id).value); } catch { }
     }
+    try { localStorage.setItem('glvt-osm', $('osm').checked ? '1' : '0'); } catch { }
     if (map) { map.remove(); map = null; }
 
-    const base = $('url').value.replace(/\/+$/, '');
+    // several URLs: the first one decides the map's CRS, all of them are drawn on top of each other
+    const urls = $('url').value.split(/\s+/).filter(Boolean).map(u => u.replace(/\/+$/, ''));
+    if (!urls.length) throw new Error('no URL');
+    const base = urls[0];
     const epsgArg = $('epsg').value.trim();
 
     const isStyleUrl = /\.json(\?|$)/i.test(base);
@@ -93,14 +122,34 @@
     map = L.map('map', { crs, maxZoom, zoomSnap: 0, zoomDelta: 0.5, wheelPxPerZoomLevel: 120 });
     window.vtcMap = map;   // for debugging in the console
 
-    const layer = L.glVectorTiles(base, {
-      epsg: grid ? grid.epsg : null,
-      debug: $('debug').checked,
-      declutter: $('declutter').checked
+    // OpenStreetMap raster tiles below the vector tiles: only possible on a WebMercator map
+    if ($('osm').checked) {
+      if (crs === L.CRS.EPSG3857) {
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+        status('OpenStreetMap background');
+      } else {
+        status('OpenStreetMap background ignored: the map is not WebMercator');
+      }
+    }
+
+    const attributions = {
+      'mapsneu.wien.gv.at': '<a href="https://basemap.at">basemap.at</a>',
+      'kataster.bev.gv.at': '&copy; <a href="https://bev.gv.at">BEV</a>'
+    };
+    window.vtcLayers = urls.map(url => {
+      const layer = L.glVectorTiles(url, {
+        epsg: grid ? grid.epsg : null,
+        debug: $('debug').checked,
+        declutter: $('declutter').checked,
+        attribution: Object.entries(attributions).find(([host]) => url.includes(host))?.[1]
+      });
+      layer.on('error', e => status('Error: ' + e.error.message));
+      return layer.addTo(map);
     });
-    layer.on('error', e => status('Error: ' + e.error.message));
-    layer.addTo(map);
-    window.vtcLayer = layer;
+    window.vtcLayer = window.vtcLayers[0];
+    if (urls.length > 1) status(`${urls.length} styles on top of each other`);
 
     // initial view: the cache extent, or the bounds / center of the classic source
     const firstSource = Object.values(style.sources || {})[0] || {};
@@ -111,6 +160,9 @@
     } else if (firstSource.bounds) {
       const b = firstSource.bounds;
       map.fitBounds([[b[1], b[0]], [b[3], b[2]]]);
+    } else if ((presets[$('preset').value] || {}).view) {
+      const v = presets[$('preset').value].view;
+      map.setView([v[0], v[1]], v[2]);
     } else if (style.center) {
       map.setView([style.center[1], style.center[0]], style.zoom || 2);
     } else {

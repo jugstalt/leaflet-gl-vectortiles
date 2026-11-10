@@ -901,6 +901,11 @@
             this._active = 0;        // running tile requests
             this._textWidths = {};   // measureText cache: font|text → width
             this._textWidthCount = 0;
+            this._placed = [];       // the labels placed at the last redraw (see _placeSymbols)
+            this._shown = {};        // label position keys shown at the last redraw: they keep their place
+            this._shownZoom = null;
+            this._sprites = {};      // label images: text with halo, glyphs → { canvas, w, h, pad }
+            this._spriteCount = 0;
         },
 
         getEvents: function () {
@@ -923,6 +928,13 @@
             this.getPane().appendChild(this._canvas);
             this._ctx = this._canvas.getContext('2d');
 
+            // labels and icons on their own canvas above the tiles: not scaled by the zoom animation, the labels
+            // keep their size and only move with the map (redrawn every frame from cached label images)
+            this._labelCanvas = L.DomUtil.create('canvas', 'leaflet-gl-vectortiles-labels');
+            this._labelCanvas.style.pointerEvents = 'none';
+            this.getPane().appendChild(this._labelCanvas);
+            this._labelCtx = this._labelCanvas.getContext('2d');
+
             this._resize();
             this._ready = this._ready || this._loadStyle();
             this._ready.then(L.bind(this._update, this), L.bind(function (error) {
@@ -942,8 +954,12 @@
                 this._active = 0;
                 this._ready = null;   // onAdd loads the style again and starts a new worker
             }
+            if (this._labelFrame) L.Util.cancelAnimFrame(this._labelFrame);
+            this._labelFrame = null;
             L.DomUtil.remove(this._canvas);
-            this._canvas = this._ctx = null;
+            L.DomUtil.remove(this._labelCanvas);
+            this._canvas = this._ctx = this._labelCanvas = this._labelCtx = null;
+            this._placed = [];
         },
 
         getAttribution: function () {
@@ -1038,7 +1054,10 @@
                 ? Promise.resolve({ tiles: source.tiles.map(function (t) { return resolveUrl(t, styleUrl); }), info: source })
                 : this._fetchJson(resolveUrl(source.url, styleUrl)).then(function (info) {
                     var base = resolveUrl(source.url, styleUrl);
-                    if (!/\/$/.test(base.split('?')[0])) base = base.split('?')[0] + '/';
+                    // a service URL (ESRI VectorTileServer) is a "directory": its tiles are relative to it;
+                    // a TileJSON file (…/tiles.json) is a file: its tiles are relative to its folder
+                    var path = base.split('?')[0];
+                    if (!/\/$/.test(path) && !/\.[a-z0-9]+$/i.test(path.split('/').pop())) base = path + '/';
                     return { tiles: (info.tiles || []).map(function (t) { return resolveUrl(t, base); }), info: info };
                 });
 
@@ -1182,6 +1201,10 @@
             this._canvas.height = Math.round(size.y * ratio);
             this._canvas.style.width = size.x + 'px';
             this._canvas.style.height = size.y + 'px';
+            this._labelCanvas.width = this._canvas.width;
+            this._labelCanvas.height = this._canvas.height;
+            this._labelCanvas.style.width = size.x + 'px';
+            this._labelCanvas.style.height = size.y + 'px';
             this._update();
         },
 
@@ -1189,10 +1212,35 @@
 
         _onZoom: function () {
             this._updateTransform(this._map.getCenter(), this._map.getZoom());
+            this._paintLabels();
         },
 
         _onAnimZoom: function (e) {
             this._updateTransform(e.center, e.zoom);
+            this._animateLabels();
+        },
+
+        // during a zoom animation (a CSS transition of the tile canvas) the labels follow it frame by frame
+        _animateLabels: function () {
+            if (this._labelFrame) return;
+            var self = this, until = Date.now() + 400;
+            (function frame() {
+                self._labelFrame = null;
+                if (!self._labelCanvas) return;
+                self._paintLabels();
+                if (Date.now() < until || (self._map && self._map._animatingZoom)) self._labelFrame = L.Util.requestAnimFrame(frame);
+            })();
+        },
+
+        // the current transform of the tile canvas (also in the middle of a CSS transition): canvas pixel → layer pixel
+        _canvasTransform: function () {
+            var m = /matrix(3d)?\(([^)]+)\)/.exec(window.getComputedStyle(this._canvas).transform || '');
+            if (!m) {
+                var pos = L.DomUtil.getPosition(this._canvas) || L.point(0, 0);
+                return { a: 1, e: pos.x, f: pos.y };
+            }
+            var v = m[2].split(',').map(parseFloat);
+            return m[1] ? { a: v[0], e: v[12], f: v[13] } : { a: v[0], e: v[4], f: v[5] };
         },
 
         _updateTransform: function (center, zoom) {
@@ -1221,6 +1269,7 @@
             this._center = map.getCenter();
             this._zoom = map.getZoom();
             L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0, 0]));
+            L.DomUtil.setPosition(this._labelCanvas, map.containerPointToLayerPoint([0, 0]));
             this._requestTiles();
             this._redraw();
         },
@@ -1580,7 +1629,8 @@
                 });
             });
 
-            this._drawSymbols(ctx, labels);
+            this._placeSymbols(labels);
+            this._paintLabels();
 
             if (this.options.debug) {
                 ctx.strokeStyle = 'rgba(255,0,0,.6)';
@@ -1719,10 +1769,11 @@
             }, this);
         },
 
-        // icon image (an SDF icon tinted with icon-color): { source, x, y, width, height }
+        // icon image (an SDF icon tinted with icon-color): { source, x, y, width, height }, the same object for the
+        // same icon (it keeps the icon's own canvas, see _iconCanvas)
         _iconImage: function (entry, name, color) {
             if (!entry.sdf || !color) {
-                return { source: this._sprite.image, x: entry.x, y: entry.y, width: entry.width, height: entry.height };
+                return entry.icon || (entry.icon = { source: this._sprite.image, x: entry.x, y: entry.y, width: entry.width, height: entry.height });
             }
 
             var key = name + '|' + color;
@@ -1742,9 +1793,9 @@
                 c.globalCompositeOperation = 'source-in';
                 c.fillStyle = color;
                 c.fillRect(0, 0, entry.width, entry.height);
-                this._tinted[key] = canvas;
+                this._tinted[key] = { source: canvas, canvas: canvas, x: 0, y: 0, width: entry.width, height: entry.height };
             }
-            return { source: this._tinted[key], x: 0, y: 0, width: entry.width, height: entry.height };
+            return this._tinted[key];
         },
 
         // ---------------------------------------------------------------- symbols (icons, labels)
@@ -1829,6 +1880,7 @@
                 if (a.x < clip[0] || a.y < clip[1] || a.x >= clip[0] + clip[2] || a.y >= clip[1] + clip[3]) return;
 
                 labels.push({
+                    id: styleLayer.id + '|' + (iconName || '') + '|' + (text || ''),
                     x: a.x, y: a.y, angle: a.angle,
                     icon: iconEntry ? self._iconImage(iconEntry, iconName, iconColor) : null,
                     iconRatio: iconEntry ? (iconEntry.pixelRatio || self._sprite.pixelRatio) : 1,
@@ -1863,8 +1915,12 @@
             });
         },
 
-        _drawSymbols: function (ctx, labels) {
-            var declutter = this.options.declutter;
+        // ---------------------------------------------------------------- labels
+
+        // collision handling: which labels (icon, text or both) are shown, and their layout in canvas pixels.
+        // Labels shown at the last redraw (same zoom) are placed first, so they don't jump while panning.
+        _placeSymbols: function (labels) {
+            var declutter = this.options.declutter, ctx = this._labelCtx;
 
             // placed boxes in a grid of 64 px cells: a box is only tested against the boxes of its cells
             var CELL = 64, grid = {};
@@ -1888,9 +1944,7 @@
                     return false;
                 });
             }
-            var placed = {
-                push: function (box) { cells(box, function (cell) { (grid[cell] || (grid[cell] = [])).push(box); }); }
-            };
+            function push(box) { cells(box, function (cell) { (grid[cell] || (grid[cell] = [])).push(box); }); }
 
             function setLetterSpacing(px) {
                 if ('letterSpacing' in ctx) ctx.letterSpacing = px ? px + 'px' : '0px';
@@ -1909,19 +1963,20 @@
                 ];
             }
 
-            var widths = this._textWidths, self = this;
-            function measure(text) {
-                var key = ctx.font + '|' + (ctx.letterSpacing || '') + '|' + text;
-                var w = widths[key];
-                if (w === undefined) {
-                    if (self._textWidthCount > 20000) { widths = self._textWidths = {}; self._textWidthCount = 0; }
-                    w = widths[key] = ctx.measureText(text).width;
-                    self._textWidthCount++;
-                }
-                return w;
-            }
+            var measure = L.bind(this._measure, this);
 
+            // position keys in layer pixels: the same feature has the same key while the map is only panned
+            var origin = this._layerOrigin(), zoom = this._map.getZoom();
+            if (zoom !== this._shownZoom) { this._shown = {}; this._shownZoom = zoom; }
+            var previous = this._shown, shown = {};
             labels.forEach(function (l) {
+                l.key = l.id + '@' + Math.round(l.x + origin.x) + ',' + Math.round(l.y + origin.y);
+            });
+            var ordered = labels.filter(function (l) { return previous[l.key]; })
+                .concat(labels.filter(function (l) { return !previous[l.key]; }));
+
+            var placed = [];
+            ordered.forEach(function (l) {
                 // ---- icon layout
                 var icon = null;
                 if (l.icon) {
@@ -1955,7 +2010,6 @@
 
                     if (l.curvedPath) {
                         // along the line, glyph by glyph
-                        setLetterSpacing(0);
                         var glyphs = placeAlongPath(measure, l.text, l.curvedPath, l.curvedDistance, l.maxAngle, l.letterSpacing * l.size);
                         if (glyphs) {
                             var half = l.size / 2 + l.padding;
@@ -1976,7 +2030,7 @@
                         var dy = anchor[1] * height + (l.offset[1] || 0) * l.size;
                         var angle = l.angle + l.textRotate;
                         text = {
-                            lines: lines, lineHeight: lineHeight, width: width, dx: dx, dy: dy, angle: angle,
+                            lines: lines, lineHeight: lineHeight, width: width, height: height, dx: dx, dy: dy, angle: angle,
                             box: rotatedBox(l, dx, dy, width, height, angle, l.padding)
                         };
                     }
@@ -1993,68 +2047,156 @@
                     else if (icon && text && textFits && l.iconOptional) showIcon = false;   // text alone
                     else return;
                 }
+                if (showIcon && !l.iconIgnorePlacement) push(icon.box);
+                if (showText && !l.textIgnorePlacement) push(text.box);
+                shown[l.key] = true;
+                placed.push({ l: l, icon: showIcon ? icon : null, text: showText ? text : null });
+            });
 
-                if (showIcon) {
-                    ctx.save();
-                    ctx.translate(l.x, l.y);
-                    ctx.rotate(l.angle + l.iconRotate);
-                    ctx.drawImage(l.icon.source, l.icon.x, l.icon.y, l.icon.width, l.icon.height, -icon.w / 2, -icon.h / 2, icon.w, icon.h);
-                    ctx.restore();
-                    if (!l.iconIgnorePlacement) placed.push(icon.box);
-                }
+            // painted in style order (the placement order only decides who wins a collision)
+            var rank = new Map();
+            labels.forEach(function (l, i) { rank.set(l, i); });
+            placed.sort(function (a, b) { return rank.get(a.l) - rank.get(b.l); });
 
-                if (showText && text.glyphs) {
-                    ctx.save();
-                    ctx.font = l.font;
-                    ctx.textBaseline = 'middle';
-                    ctx.textAlign = 'center';
-                    ctx.globalAlpha = l.opacity;
-                    // first all halos, then all glyphs: halos must not cover neighbor glyphs
-                    [true, false].forEach(function (halo) {
-                        if (halo && !(l.haloColor && l.haloWidth > 0)) return;
-                        text.glyphs.forEach(function (g) {
-                            ctx.save();
-                            ctx.translate(g.x, g.y);
-                            ctx.rotate(g.angle);
-                            if (halo) {
-                                ctx.lineJoin = 'round';
-                                ctx.lineWidth = l.haloWidth * 2;
-                                ctx.strokeStyle = l.haloColor;
-                                ctx.strokeText(g.ch, 0, 0);
-                            } else {
-                                ctx.fillStyle = l.color;
-                                ctx.fillText(g.ch, 0, 0);
-                            }
-                            ctx.restore();
-                        });
-                    });
-                    ctx.restore();
-                    if (!l.textIgnorePlacement) placed.push(text.box);
-                } else if (showText) {
-                    ctx.save();
-                    ctx.font = l.font;
-                    setLetterSpacing(l.letterSpacing * l.size);
-                    ctx.translate(l.x, l.y);
-                    ctx.rotate(text.angle);
-                    ctx.textBaseline = 'top';
-                    ctx.textAlign = 'center';
-                    ctx.globalAlpha = l.opacity;
-                    text.lines.forEach(function (line, i) {
-                        var lx = text.dx + text.width / 2, ly = text.dy + i * text.lineHeight + (text.lineHeight - l.size) / 2;
-                        if (l.haloColor && l.haloWidth > 0) {
-                            ctx.lineJoin = 'round';
-                            ctx.lineWidth = l.haloWidth * 2;
-                            ctx.strokeStyle = l.haloColor;
-                            ctx.strokeText(line, lx, ly);
-                        }
-                        ctx.fillStyle = l.color;
-                        ctx.fillText(line, lx, ly);
-                    });
-                    ctx.restore();
-                    setLetterSpacing(0);
-                    if (!l.textIgnorePlacement) placed.push(text.box);
+            this._placed = placed;
+            this._shown = shown;
+        },
+
+        _measure: function (text) {
+            var ctx = this._labelCtx;
+            var key = ctx.font + '|' + (ctx.letterSpacing || '') + '|' + text;
+            var w = this._textWidths[key];
+            if (w === undefined) {
+                if (this._textWidthCount > 20000) { this._textWidths = {}; this._textWidthCount = 0; }
+                w = this._textWidths[key] = ctx.measureText(text).width;
+                this._textWidthCount++;
+            }
+            return w;
+        },
+
+        // a label image (text with halo, or one glyph's halo or fill), drawn once and reused on every frame
+        _labelImage: function (key, w, h, pad, draw) {
+            var sprite = this._sprites[key];
+            if (sprite) return sprite;
+            if (this._spriteCount > 3000) { this._sprites = {}; this._spriteCount = 0; }
+            var ratio = window.devicePixelRatio || 1;
+            var canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, Math.ceil((w + 2 * pad) * ratio));
+            canvas.height = Math.max(1, Math.ceil((h + 2 * pad) * ratio));
+            var ctx = canvas.getContext('2d');
+            ctx.scale(ratio, ratio);
+            draw(ctx);
+            this._spriteCount++;
+            return (this._sprites[key] = { canvas: canvas, w: canvas.width / ratio, h: canvas.height / ratio, pad: pad });
+        },
+
+        // an icon cut out of the sprite sheet once: drawing a part of a big image is slow, per frame and icon
+        _iconCanvas: function (icon) {
+            if (icon.canvas) return icon.canvas;
+            var canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, icon.width);
+            canvas.height = Math.max(1, icon.height);
+            canvas.getContext('2d').drawImage(icon.source, icon.x, icon.y, icon.width, icon.height, 0, 0, icon.width, icon.height);
+            return (icon.canvas = canvas);
+        },
+
+        _textSprite: function (l, text) {
+            var halo = l.haloColor && l.haloWidth > 0, pad = (halo ? l.haloWidth : 0) + Math.ceil(l.size * 0.25);
+            var key = 't|' + l.font + '|' + l.letterSpacing + '|' + l.color + '|' + (halo ? l.haloColor + '|' + l.haloWidth : '') + '|' + text.lines.join('\n');
+            return this._labelImage(key, text.width, text.height, pad, function (ctx) {
+                ctx.font = l.font;
+                if ('letterSpacing' in ctx) ctx.letterSpacing = l.letterSpacing ? l.letterSpacing * l.size + 'px' : '0px';
+                ctx.textBaseline = 'top';
+                ctx.textAlign = 'center';
+                ctx.lineJoin = 'round';
+                text.lines.forEach(function (line, i) {
+                    var lx = pad + text.width / 2, ly = pad + i * text.lineHeight + (text.lineHeight - l.size) / 2;
+                    if (halo) {
+                        ctx.lineWidth = l.haloWidth * 2;
+                        ctx.strokeStyle = l.haloColor;
+                        ctx.strokeText(line, lx, ly);
+                    }
+                    ctx.fillStyle = l.color;
+                    ctx.fillText(line, lx, ly);
+                });
+            });
+        },
+
+        _glyphSprite: function (l, ch, halo) {
+            var pad = (halo ? l.haloWidth : 0) + Math.ceil(l.size * 0.25);
+            var key = (halo ? 'h|' + l.haloColor + '|' + l.haloWidth : 'g|' + l.color) + '|' + l.font + '|' + ch;
+            var ctx = this._labelCtx;
+            ctx.font = l.font;
+            var w = this._measure(ch), h = l.size * 1.4;
+            return this._labelImage(key, w, h, pad, function (c) {
+                c.font = l.font;
+                c.textBaseline = 'middle';
+                c.textAlign = 'center';
+                if (halo) {
+                    c.lineJoin = 'round';
+                    c.lineWidth = l.haloWidth * 2;
+                    c.strokeStyle = l.haloColor;
+                    c.strokeText(ch, pad + w / 2, pad + h / 2);
+                } else {
+                    c.fillStyle = l.color;
+                    c.fillText(ch, pad + w / 2, pad + h / 2);
                 }
             });
+        },
+
+        // the placed labels on the label canvas, at the current (possibly animated) transform of the tile canvas:
+        // the anchors move with the map, the labels keep their size
+        _paintLabels: function () {
+            var ctx = this._labelCtx;
+            if (!ctx || !this._map) return;
+            var ratio = window.devicePixelRatio || 1, size = this._map.getSize();
+            ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+            ctx.clearRect(0, 0, size.x, size.y);
+            if (!this._placed.length) return;
+
+            var m = this._canvasTransform(), own = L.DomUtil.getPosition(this._labelCanvas) || L.point(0, 0);
+            var self = this, maxX = size.x + 256, maxY = size.y + 256;
+
+            // one transform per image (rotation about the anchor, device pixel ratio): no save/restore per label
+            function place(x, y, angle) {
+                if (!angle) { ctx.setTransform(ratio, 0, 0, ratio, ratio * x, ratio * y); return; }
+                var cos = Math.cos(angle) * ratio, sin = Math.sin(angle) * ratio;
+                ctx.setTransform(cos, sin, -sin, cos, ratio * x, ratio * y);
+            }
+
+            var placed = this._placed;
+            for (var i = 0; i < placed.length; i++) {
+                var p = placed[i], l = p.l;
+                var x = m.e + m.a * l.x - own.x, y = m.f + m.a * l.y - own.y;
+                if (x < -256 || y < -256 || x > maxX || y > maxY) continue;
+
+                if (p.icon) {
+                    place(x, y, l.angle + l.iconRotate);
+                    ctx.drawImage(self._iconCanvas(l.icon), -p.icon.w / 2, -p.icon.h / 2, p.icon.w, p.icon.h);
+                }
+                if (!p.text) continue;
+
+                ctx.globalAlpha = l.opacity;
+                if (p.text.glyphs) {
+                    // first all halos, then all glyphs: halos must not cover neighbor glyphs
+                    var dx = x - l.x, dy = y - l.y, glyphs = p.text.glyphs;
+                    for (var pass = 0; pass < 2; pass++) {
+                        var halo = pass === 0;
+                        if (halo && !(l.haloColor && l.haloWidth > 0)) continue;
+                        for (var j = 0; j < glyphs.length; j++) {
+                            var g = glyphs[j], gs = self._glyphSprite(l, g.ch, halo);
+                            place(g.x + dx, g.y + dy, g.angle);
+                            ctx.drawImage(gs.canvas, -gs.w / 2, -gs.h / 2, gs.w, gs.h);
+                        }
+                    }
+                } else {
+                    var s = self._textSprite(l, p.text);
+                    place(x, y, p.text.angle);
+                    ctx.drawImage(s.canvas, p.text.dx - s.pad, p.text.dy - s.pad, s.w, s.h);
+                }
+                ctx.globalAlpha = 1;
+            }
+            ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
         }
     });
 
