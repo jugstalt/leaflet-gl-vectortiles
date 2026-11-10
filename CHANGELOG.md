@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Color schemes: option `colorScheme` and `setColorScheme()` at runtime: `'pale'` (background for thematic data),
+  `'grayscale'`, `'dark'` (lightness inverted, hues kept) or an own function `(rgba, info) → rgba`. All colors of the
+  style and the sprite images (icons, patterns) are recolored, in the worker too; `L.glVectorTiles.schemeColor(color,
+  scheme)` for the map container's background. Example page: a color scheme selector.
+
 ## 0.3.1
 
 - Tile images are rendered in software on the worker thread (option `gpuTileRendering`, default false): Chrome and

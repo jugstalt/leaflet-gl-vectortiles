@@ -189,3 +189,37 @@ test('data driven style layers are detected (drawn feature by feature)', () => {
     assert.equal(layerIsDataDriven({ paint: { 'fill-color': { property: 'kind', stops: [['a', 'red']] } } }), true);
     assert.equal(layerIsDataDriven({ layout: { 'text-field': '{name}' } }), false, 'tokens are resolved per feature anyway');
 });
+
+test('color schemes: grayscale, pale, dark, a function; colors that cannot be parsed stay', () => {
+    const { schemeColor, colorSchemeFunction } = shared;
+    const gray = colorSchemeFunction('grayscale'), pale = colorSchemeFunction('pale'), dark = colorSchemeFunction('dark');
+    assert.equal(schemeColor('#ff0000', gray), 'rgba(54,54,54,1)');
+    assert.equal(schemeColor('rgba(0,128,255,0.5)', gray), 'rgba(110,110,110,0.5)', 'alpha kept');
+    const p = shared.parseColor(schemeColor('#008000', pale));
+    assert.ok(p[0] > 100 && p[1] > 150 && p[2] > 100, 'pale: lighter, less saturated');
+    assert.equal(schemeColor('#ffffff', dark), 'rgba(20,20,20,1)', 'white → dark gray, not black');
+    assert.equal(schemeColor('#000000', dark), 'rgba(224,224,224,1)', 'black → light gray');
+    const water = shared.parseColor(schemeColor('#a0c8f0', dark));
+    assert.ok(water[2] > water[0] && water[0] < 100, 'dark: light blue water becomes dark blue (hue kept)');
+    assert.equal(schemeColor('#123456', (c) => [255 - c[0], 255 - c[1], 255 - c[2], c[3]]), 'rgba(237,203,169,1)', 'own function');
+    assert.equal(schemeColor('nonsense', gray), 'nonsense');
+    assert.equal(colorSchemeFunction(null), null);
+    assert.equal(colorSchemeFunction('unknown'), null);
+});
+
+test('the renderer: paint colors through the scheme, other values untouched', () => {
+    const renderer = new shared.TileRenderer();
+    renderer.setColorScheme(shared.colorSchemeFunction('grayscale'));
+    const layer = { id: 'x', paint: { 'fill-color': '#ff0000', 'fill-opacity': 0.5, 'line-color': ['interpolate', ['linear'], ['zoom'], 0, '#000', 10, '#fff'] } };
+    assert.equal(renderer._paint(layer, 'fill-color', null, 5, null), 'rgba(54,54,54,1)');
+    assert.equal(renderer._paint(layer, 'fill-opacity', null, 5, null), 0.5);
+    assert.equal(renderer._paint(layer, 'line-color', null, 5, null), 'rgba(128,128,128,1)');
+    renderer.setColorScheme(null);
+    assert.equal(renderer._paint(layer, 'fill-color', null, 5, null), '#ff0000');
+});
+
+test('a scheme function sent to the worker as source works there too', () => {
+    const fn = function (c) { return [c[2], c[1], c[0], c[3]]; };
+    const restored = (new Function('return (' + fn.toString() + ');'))();
+    assert.equal(shared.schemeColor('#102030', restored), 'rgba(48,32,16,1)');
+});

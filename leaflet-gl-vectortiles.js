@@ -248,6 +248,65 @@
             return 'rgba(' + r(c[0]) + ',' + r(c[1]) + ',' + r(c[2]) + ',' + Math.round(Math.max(0, Math.min(1, c[3])) * 1000) / 1000 + ')';
         }
 
+        // ------------------------------------------------------------------------------------------
+        // Color schemes: every color of the style (and the sprite images) through one function
+        // [r, g, b, a] (0–255, alpha 0–1) → [r, g, b, a]
+        // ------------------------------------------------------------------------------------------
+
+        function rgbToHsl(c) {
+            var r = c[0] / 255, g = c[1] / 255, b = c[2] / 255;
+            var max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2, h = 0, s = 0;
+            if (max !== min) {
+                var d = max - min;
+                s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+                h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+                h *= 60;
+            }
+            return [h, s * 100, l * 100];
+        }
+
+        var luminance = function (c) { return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+
+        var COLOR_SCHEMES = {
+            // gray tones of the same brightness
+            grayscale: function (c) {
+                var l = luminance(c);
+                return [l, l, l, c[3]];
+            },
+            // the map steps back (a background for thematic data): less saturated, lighter
+            pale: function (c) {
+                var l = luminance(c);
+                return [0, 1, 2].map(function (i) {
+                    var v = c[i] + (l - c[i]) * 0.6;   // 60 % toward gray
+                    return v + (255 - v) * 0.45;      // 45 % toward white
+                }).concat([c[3]]);
+            },
+            // dark: lightness inverted, hues kept (water stays blue, forests green), half the saturation (light pastel
+            // tones would turn into strong dark colors)
+            dark: function (c) {
+                var hsl = rgbToHsl(c);
+                var l = 100 - hsl[2];
+                l = 8 + l * 0.8;   // no pure black or white
+                return hslToRgb(hsl[0], hsl[1] * 0.5, l).concat([c[3]]);
+            }
+        };
+
+        // a scheme: a name ('grayscale', 'pale', 'dark') or a function (rgba, info) → rgba
+        function colorSchemeFunction(scheme) {
+            if (!scheme) return null;
+            if (typeof scheme === 'function') return scheme;
+            return COLOR_SCHEMES[scheme] || null;
+        }
+
+        // a CSS color through a scheme (colors that can't be parsed stay as they are)
+        function schemeColor(color, fn, info) {
+            if (!fn || typeof color !== 'string') return color;
+            var c = parseColor(color);
+            if (!c) return color;
+            var out = fn(c, info || {});
+            return out ? formatColor(out) : color;
+        }
+
         // between two output values: numbers, colors or arrays of numbers
         function interpolateValue(a, b, t) {
             if (typeof a === 'number' && typeof b === 'number') return a + t * (b - a);
@@ -660,6 +719,7 @@
         TileRenderer.prototype = {
             setStyle: function (style) { this._style = style; this._patterns = {}; },
             setSprite: function (sprite) { this._sprite = sprite; this._patterns = {}; this._tintedIcons = {}; },
+            setColorScheme: function (fn) { this._colorFn = fn; this._schemeCache = {}; this._patterns = {}; this._tintedIcons = {}; },
 
             // all geometry layers of a source for one tile (d: { entry, x0, y0, sx, sy, clip })
             // the geometry layers of a source for one tile, optionally only the style layers from..to (a run)
@@ -713,7 +773,16 @@
             },
 
             _paint: function (styleLayer, name, feature, zoom, fallback) {
-                return this._value(styleLayer, 'paint', name, feature, zoom, fallback);
+                var value = this._value(styleLayer, 'paint', name, feature, zoom, fallback);
+                // colors through the color scheme (cached per color)
+                if (this._colorFn && typeof value === 'string' && name.slice(-6) === '-color') {
+                    var key = name + '|' + value, cached = this._schemeCache[key];
+                    if (cached === undefined) {
+                        cached = this._schemeCache[key] = schemeColor(value, this._colorFn, { property: name, layer: styleLayer.id });
+                    }
+                    return cached;
+                }
+                return value;
             },
 
             _layout: function (styleLayer, name, feature, zoom, fallback) {
@@ -975,6 +1044,7 @@
             decodeTile: decodeTile, evaluate: evaluate, evaluateValue: evaluateValue, resolveTokens: resolveTokens,
             filterMatches: filterMatches, filterUsesZoom: filterUsesZoom, layerIsDataDriven: layerIsDataDriven,
             addPath: addPath, makeCanvas: makeCanvas, symbolAnchors: symbolAnchors, iconInTile: iconInTile, parseColor: parseColor,
+            colorSchemeFunction: colorSchemeFunction, schemeColor: schemeColor, COLOR_SCHEMES: COLOR_SCHEMES,
             TileRenderer: TileRenderer
         };
     }
@@ -991,6 +1061,14 @@
             switch (m.type) {
                 case 'style':
                     renderer.setStyle(m.style);
+                    break;
+
+                case 'scheme':
+                    var schemeFn = null;
+                    try {
+                        schemeFn = m.source ? (new Function('return (' + m.source + ');'))() : shared.colorSchemeFunction(m.name);
+                    } catch (e) { schemeFn = null; }
+                    renderer.setColorScheme(schemeFn);
                     break;
 
                 case 'sprite':
@@ -1104,6 +1182,7 @@
     var gvs = gvShared();
     var decodeTile = gvs.decodeTile, evaluateValue = gvs.evaluateValue, resolveTokens = gvs.resolveTokens;
     var symbolAnchors = gvs.symbolAnchors, iconInTile = gvs.iconInTile;
+    var colorSchemeFunction = gvs.colorSchemeFunction, schemeColor = gvs.schemeColor;
 
     // ------------------------------------------------------------------------------------------
     // Fonts, colors
@@ -1256,6 +1335,10 @@
             // render tile images on the GPU (Chrome/Edge accelerate canvases; dense vector tiles are much faster in
             // software, on the worker thread); false: software rendering
             gpuTileRendering: false,
+            // colors of the style (and sprite images) through a scheme: 'grayscale', 'pale', 'dark' or a function
+            // (rgba, info) → rgba with rgba = [r, g, b, a] (0–255, alpha 0–1), info = { property, layer }.
+            // A function must be self-contained (it is also run in the worker); null: the style's own colors
+            colorScheme: null,
             // milliseconds to fade in new tiles and labels; 0 = no fading
             fadeDuration: 200,
             // economical defaults for weak clients (see LOW_POWER); options set explicitly take precedence
@@ -1640,6 +1723,7 @@
                             : 'Not a GL style (no layers): ' + styleUrl);
                     }
                     self._style = style;
+                    self._renderer.setColorScheme(colorSchemeFunction(self.options.colorScheme));
                     self._markIconsInTiles(style);
                     self._runs = self._buildRuns(style);
                     self._renderer.setStyle(style);
@@ -1781,8 +1865,77 @@
                         index[prefix + name] = entry;
                     });
                 });
-                self._sprite = { index: index, image: image, pixelRatio: ratio };
+                self._spriteOriginal = image;
+                self._sprite = { index: index, image: self._schemeImage(image), pixelRatio: ratio };
                 self._renderer.setSprite(self._sprite);
+            });
+        },
+
+        // the sprite image through the color scheme (pixel by pixel, once per scheme)
+        _schemeImage: function (image) {
+            var fn = colorSchemeFunction(this.options.colorScheme);
+            if (!fn || !image) return image;
+            var canvas = document.createElement('canvas');
+            canvas.width = image.width;
+            canvas.height = image.height;
+            var ctx = canvas.getContext('2d', { willReadFrequently: true });
+            ctx.drawImage(image, 0, 0);
+            var data;
+            try { data = ctx.getImageData(0, 0, canvas.width, canvas.height); } catch (e) { return image; }   // tainted
+            var px = data.data, c = [0, 0, 0, 0], info = { property: 'icon-image' };
+            for (var i = 0; i < px.length; i += 4) {
+                if (px[i + 3] === 0) continue;
+                c[0] = px[i]; c[1] = px[i + 1]; c[2] = px[i + 2]; c[3] = px[i + 3] / 255;
+                var out = fn(c, info);
+                if (!out) continue;
+                px[i] = out[0]; px[i + 1] = out[1]; px[i + 2] = out[2];
+            }
+            ctx.putImageData(data, 0, 0);
+            return canvas;
+        },
+
+        // the scheme to the renderer and the worker (a function is sent as its source)
+        _applyColorScheme: function () {
+            var scheme = this.options.colorScheme;
+            this._renderer.setColorScheme(colorSchemeFunction(scheme));
+            if (this._worker) {
+                this._worker.postMessage(typeof scheme === 'function'
+                    ? { type: 'scheme', source: scheme.toString() }
+                    : { type: 'scheme', name: scheme || null });
+            }
+        },
+
+        /**
+         * Another color scheme at runtime: 'grayscale', 'pale', 'dark', a function (rgba, info) → rgba, or null for the
+         * style's own colors.
+         */
+        setColorScheme: function (scheme) {
+            this.options.colorScheme = scheme || null;
+            var self = this;
+            this._applyColorScheme();
+            // label images, icons and the sprite with the new colors
+            this._sprites = {};
+            this._spriteCount = 0;
+            this._curvedCache = {};
+            this._tinted = {};
+            if (this._sprite && this._spriteOriginal) {
+                Object.keys(this._sprite.index).forEach(function (name) { delete self._sprite.index[name].icon; });
+                this._sprite.image = this._schemeImage(this._spriteOriginal);
+                this._renderer.setSprite(this._sprite);
+                this._sendSprite();
+            }
+            this._styleVersion++;   // tile images rendered again
+            if (this._map) this._redraw();
+            return this;
+        },
+
+        getColorScheme: function () { return this.options.colorScheme; },
+
+        _sendSprite: function () {
+            var worker = this._worker, sprite = this._sprite;
+            if (!worker || !sprite) return Promise.resolve();
+            return createImageBitmap(sprite.image).then(function (bitmap) {
+                worker.postMessage({ type: 'sprite', sprite: { index: sprite.index, image: bitmap, pixelRatio: sprite.pixelRatio } }, [bitmap]);
             });
         },
 
@@ -1806,12 +1959,11 @@
             worker.postMessage({ type: 'style', style: this._style });
 
             this._worker = worker;
+            this._applyColorScheme();
 
             // the sprite (icons, patterns) before the first render job
             if (!this._sprite) return null;
-            return createImageBitmap(this._sprite.image).then(function (bitmap) {
-                worker.postMessage({ type: 'sprite', sprite: { index: self._sprite.index, image: bitmap, pixelRatio: self._sprite.pixelRatio } }, [bitmap]);
-            });
+            return this._sendSprite();
         },
 
         _stopWorker: function () {
@@ -3269,6 +3421,8 @@
     };
 
     GLVectorTiles.decodeTile = decodeTile;
+    /** A CSS color through a color scheme, e.g. the map container's background: schemeColor('#fff', 'dark'). */
+    GLVectorTiles.schemeColor = function (color, scheme) { return schemeColor(color, colorSchemeFunction(scheme)); };
     GLVectorTiles.evaluate = evaluateValue;
     GLVectorTiles.shared = gvShared;
     // for the tests (not a public API)
@@ -3280,6 +3434,7 @@
     };
     L.glVectorTiles.createCrs = GLVectorTiles.createCrs;
     L.glVectorTiles.decodeTile = decodeTile;
+    L.glVectorTiles.schemeColor = GLVectorTiles.schemeColor;
 
     return GLVectorTiles;
 }));

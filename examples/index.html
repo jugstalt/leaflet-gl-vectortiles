@@ -146,6 +146,16 @@
     </label>
     <p class="hint">A GL style (…/style.json, …/root.json) or a gView vtc service URL. Several URLs (one per line) are drawn on top of each other.</p>
 
+    <label class="field">
+      <span>Color scheme</span>
+      <select id="scheme">
+        <option value="">Original colors</option>
+        <option value="pale">Pale (background for thematic data)</option>
+        <option value="grayscale">Grayscale</option>
+        <option value="dark">Dark</option>
+      </select>
+    </label>
+
     <details id="options">
       <summary>Options</summary>
       <div class="content">
@@ -380,6 +390,7 @@
         declutter: $('declutter').checked,
         lowPower: $('lowpower').checked,
         gpuTileRendering: $('gpu').checked,
+        colorScheme: $('scheme').value || null,
         attribution: Object.entries(attributions).find(([host]) => url.includes(host))?.[1]
       });
       layer.on('error', e => status('Error: ' + e.error.message, true));
@@ -413,6 +424,18 @@
     map.on('zoom move zoomend moveend', showInfo);
     showInfo();
   }
+
+  // color scheme: switched at runtime (no reload); the map container's background through the same scheme
+  function applySchemeBackground() {
+    $('map').style.background = L.glVectorTiles.schemeColor('#ffffff', $('scheme').value || null);
+  }
+  try { const v = localStorage.getItem('glvt-scheme'); if (v !== null) $('scheme').value = v; } catch { }
+  applySchemeBackground();
+  $('scheme').addEventListener('change', () => {
+    try { localStorage.setItem('glvt-scheme', $('scheme').value); } catch { }
+    applySchemeBackground();
+    (window.vtcLayers || []).forEach(layer => layer.setColorScheme($('scheme').value || null));
+  });
 
   function run() { load().catch(e => status('Error: ' + e.message, true)); }
   $('load').addEventListener('click', run);

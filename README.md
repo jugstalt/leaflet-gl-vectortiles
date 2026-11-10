@@ -133,6 +133,7 @@ otherwise zooming beyond it gives no scale in Leaflet.
 | `renderBudget` | `12` | milliseconds per frame for rendering tile images on the main thread (fallback) |
 | `maxCachedTiles` | `384` | tiles kept in memory |
 | `liveRedrawInterval` | `150` | milliseconds between redraws while the map is dragged or zoomed without animation (pinch, smooth wheel zoom): tiles are loaded and their finished images drawn during the gesture (labels only move with the map); `0`: only at its end |
+| `colorScheme` | `null` | the style in other colors: `'pale'`, `'grayscale'`, `'dark'` or a function, see [Color schemes](#color-schemes) |
 | `gpuTileRendering` | `false` | render the tile images on the GPU. Chrome and Edge accelerate canvases on the GPU, but dense vector tiles (thousands of small paths) are faster in software on the worker thread and keep the GPU free for the page |
 | `fadeDuration` | `200` | milliseconds to fade in new tiles and labels; `0`: no fading |
 | `preload` | `1` | rings of tiles loaded around the visible ones (after them); `0`: none |
@@ -186,6 +187,34 @@ layer.on('styleload', () => {
 
 Changes keep the shown tiles until they are rendered again with the new style. The example page lists the style
 layers as themes (grouped by the first part of their id) to switch them.
+
+### Color schemes
+
+Any style in other colors, without a second style: every color of the style (fills, lines, text, halos, background,
+icon colors, also in ramps and expressions) and the sprite images (icons, patterns) go through a color scheme.
+
+| Scheme | |
+|---|---|
+| `'pale'` | less saturated and lighter: the background map steps back behind thematic data |
+| `'grayscale'` | gray tones of the same brightness, e.g. for printing |
+| `'dark'` | lightness inverted, hues kept (water stays blue, forests green), half the saturation |
+| a function | `(rgba, info) => rgba`, `rgba = [r, g, b, a]` (0–255, alpha 0–1), `info = { property, layer }` |
+
+```js
+const layer = L.glVectorTiles(url, { colorScheme: 'pale' }).addTo(map);
+layer.setColorScheme('dark');   // at runtime, no reload
+layer.setColorScheme(null);     // the style's own colors
+
+// own scheme: a tint in a house color (the function also runs in the worker: no outer variables)
+layer.setColorScheme(function (c) {
+  var l = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  return [l * 0.9, l * 0.95, l, c[3]];
+});
+```
+
+Areas the style doesn't paint show the map container: `L.glVectorTiles.schemeColor('#ffffff', 'dark')` gives the
+matching background color, e.g. `map.getContainer().style.background = …`. Other layers of the map (raster tiles,
+markers) are not changed.
 
 ### Smooth zooming
 
