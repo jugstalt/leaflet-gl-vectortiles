@@ -118,10 +118,49 @@ otherwise zooming beyond it gives no scale in Leaflet.
 | `fetchOptions` | `{}` | options for `fetch`, e.g. `{ credentials: 'include' }` or headers for authorization |
 | `debug` | `false` | draw the tile borders and coordinates |
 | `pane` | `'overlayPane'` | the Leaflet pane |
-| `attribution` | `null` | |
+| `attribution` | `null` | `null`: the attribution of the sources (TileJSON `attribution`, ESRI `copyrightText`); basemap.at has none in its metadata, set it here |
+| `opacity` | `1` | opacity of the layer (`setOpacity`) |
+| `zIndex` | `null` | z-index of the layer's canvases within the pane (`setZIndex`) |
+| `minZoom`, `maxZoom` | `null` | the layer is only shown (and loaded) within these map zoom levels |
 
-Events: `load` (style loaded), `error` (`e.error`). Methods: `getStyle()`, `getGrid()`.
+Events:
+
+| Event | |
+|---|---|
+| `styleload` | the style, sources and sprite are loaded (`e.style`); from now on the style can be changed |
+| `loading` | visible tiles start to load |
+| `load` | all visible tiles are loaded and drawn |
+| `tileerror` | a tile could not be loaded (`e.key`, `e.url`, `e.error`); 404 and 204 count as empty tiles |
+| `error` | the style or a source could not be loaded (`e.error`) |
+
+Methods: `getStyle()`, `getGrid()`, `setOpacity(opacity)`, `setZIndex(zIndex)` and the style methods below.
 Static: `L.glVectorTiles.createCrs(grid, proj4Definition, options)`, `L.glVectorTiles.decodeTile(arrayBuffer)`.
+
+### Style at runtime
+
+After `styleload` style layers can be switched and changed, e.g. themes of a background map in a WebGIS. Style
+layers are addressed by id, an array of ids, a RegExp (tested on the id) or a function `(styleLayer) => bool`:
+
+```js
+layer.on('styleload', () => {
+  layer.setLayerVisibility(/^GEBAEUDE\//, false);                  // all building layers of basemap.at
+  layer.setPaintProperty('Grundstücke', 'line-color', '#0066ff');
+  layer.setFilter('Gebäudenutzung', ['==', 'ns', 41]);
+});
+```
+
+| Method | |
+|---|---|
+| `getLayers()` | the style layers: `[{ id, type, source, sourceLayer, visible, minzoom, maxzoom, metadata }]` |
+| `getLayerVisibility(id)` | `true`/`false` |
+| `setLayerVisibility(layers, visible)` | |
+| `setLayoutProperty(layers, name, value)` | `null` removes the property |
+| `setPaintProperty(layers, name, value)` | `null` removes the property |
+| `setFilter(layers, filter)` | `null` removes the filter |
+| `setStyle(style)` | another style: style URL, gView vtc service URL or style object (loaded again: `styleload`) |
+
+Changes keep the shown tiles until they are rendered again with the new style. The example page lists the style
+layers as themes (grouped by the first part of their id) to switch them.
 
 ### Smooth zooming
 

@@ -16,6 +16,9 @@
     #panel input[type=text] { width: 100%; box-sizing: border-box; }
     #panel button { margin-top: 8px; }
     #status { margin-top: 8px; white-space: pre-wrap; max-height: 30vh; overflow: auto; font-family: ui-monospace, monospace; font-size: 11px; }
+    #themes { margin-top: 8px; max-height: 30vh; overflow: auto; border-top: 1px solid var(--border); }
+    #themes label { margin-top: 2px; font-size: 12px; }
+    #themes:empty { display: none; }
     #info { position: absolute; bottom: 8px; left: 8px; z-index: 1000; padding: 4px 8px; background: var(--panel); border-radius: 4px; }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -46,6 +49,7 @@
   <label><input id="declutter" type="checkbox" checked> declutter labels</label>
   <button id="load">Load</button>
   <div id="status"></div>
+  <div id="themes"></div>
 </div>
 <div id="info"></div>
 
@@ -53,7 +57,41 @@
 (() => {
   const $ = id => document.getElementById(id);
   const status = msg => { $('status').textContent += msg + '\n'; };
-  let map;
+  let map, loadingCount = 0;
+
+  function showInfo() {
+    if (!map) return;
+    const t = map.options.crs.transformation, res = 1 / (map.options.crs.scale(map.getZoom()) * (t && t._a ? Math.abs(t._a) : 1));
+    $('info').textContent = `resolution ${res.toFixed(3)} · approx. 1:${Math.round(res * 96 / 0.0254).toLocaleString()} · zoom ${map.getZoom().toFixed(2)}` +
+      (loadingCount ? ' · loading…' : '');
+  }
+
+  // themes: the style layers grouped by the first part of their id ("GEBAEUDE/…", "Grundstücke - …"),
+  // switched with setLayerVisibility
+  function showThemes() {
+    const box = $('themes');
+    box.textContent = '';
+    (window.vtcLayers || []).forEach(layer => {
+      const groups = new Map();
+      layer.getLayers().forEach(l => {
+        const name = l.id.split(/\/| - /)[0].trim();
+        if (!groups.has(name)) groups.set(name, []);
+        groups.get(name).push(l);
+      });
+      const title = document.createElement('div');
+      title.style.cssText = 'margin-top:6px;font-weight:600';
+      title.textContent = (layer.getStyle().name || 'style') + ' – themes';
+      box.appendChild(title);
+      groups.forEach((layers, name) => {
+        const label = document.createElement('label'), box2 = document.createElement('input');
+        box2.type = 'checkbox';
+        box2.checked = layers.some(l => l.visible);
+        box2.addEventListener('change', () => layer.setLayerVisibility(layers.map(l => l.id), box2.checked));
+        label.append(box2, ` ${name} (${layers.length})`);
+        box.appendChild(label);
+      });
+    });
+  }
 
   // ready-made test services; "custom" keeps what is typed into the URL field
   const BEV = 'https://kataster.bev.gv.at/at.gv.bev.kataster/styles_kataster';
@@ -88,6 +126,8 @@
     }
     try { localStorage.setItem('glvt-osm', $('osm').checked ? '1' : '0'); } catch { }
     if (map) { map.remove(); map = null; }
+    $('themes').textContent = '';
+    loadingCount = 0;
 
     // several URLs: the first one decides the map's CRS, all of them are drawn on top of each other
     const urls = $('url').value.split(/\s+/).filter(Boolean).map(u => u.replace(/\/+$/, ''));
@@ -137,9 +177,9 @@
       }
     }
 
+    // sources without attribution in their metadata (BEV: from its TileJSON, automatically)
     const attributions = {
-      'mapsneu.wien.gv.at': '<a href="https://basemap.at">basemap.at</a>',
-      'kataster.bev.gv.at': '&copy; <a href="https://bev.gv.at">BEV</a>'
+      'mapsneu.wien.gv.at': '<a href="https://basemap.at">basemap.at</a>'
     };
     window.vtcLayers = urls.map(url => {
       const layer = L.glVectorTiles(url, {
@@ -150,6 +190,10 @@
         attribution: Object.entries(attributions).find(([host]) => url.includes(host))?.[1]
       });
       layer.on('error', e => status('Error: ' + e.error.message));
+      layer.on('tileerror', e => status('Tile error: ' + e.url));
+      layer.on('loading', () => { loadingCount++; showInfo(); });
+      layer.on('load', () => { loadingCount = Math.max(0, loadingCount - 1); showInfo(); });
+      layer.on('styleload', showThemes);
       return layer.addTo(map);
     });
     window.vtcLayer = window.vtcLayers[0];
@@ -173,10 +217,6 @@
       map.setView([0, 0], 1);
     }
 
-    const showInfo = () => {
-      const t = map.options.crs.transformation, res = 1 / (map.options.crs.scale(map.getZoom()) * (t && t._a ? Math.abs(t._a) : 1));
-      $('info').textContent = `resolution ${res.toFixed(3)} · approx. 1:${Math.round(res * 96 / 0.0254).toLocaleString()} · zoom ${map.getZoom().toFixed(2)}`;
-    };
     map.on('zoomend moveend', showInfo);
     showInfo();
   }

@@ -373,7 +373,7 @@
                 Object.keys(paint).forEach(function (k) { if (isDataDriven(paint[k])) driven = true; });
                 Object.keys(layout).forEach(function (k) { if (isDataDriven(layout[k])) driven = true; });
                 // cached on the style layer object (not part of the GL style)
-                Object.defineProperty(styleLayer, '_gvDataDriven', { value: driven, enumerable: false });
+                Object.defineProperty(styleLayer, '_gvDataDriven', { value: driven, enumerable: false, configurable: true });
             }
             return styleLayer._gvDataDriven;
         }
@@ -824,9 +824,28 @@
                             self.postMessage({ type: 'loaded', key: m.key, layers: symbolLayers, filtered: filtered });
                         })
                         .catch(function (error) {
-                            self.postMessage({ type: error && error.name === 'AbortError' ? 'aborted' : 'error', key: m.key });
+                            self.postMessage({ type: error && error.name === 'AbortError' ? 'aborted' : 'error', key: m.key, error: error ? String(error.message || error) : '' });
                         })
                         .then(function () { delete controllers[m.key]; });
+                    break;
+
+                case 'refilter':
+                    // filters of style layers changed: cached filter results are dropped, symbol layers are
+                    // filtered again for the main thread
+                    Object.keys(tiles).forEach(function (key) {
+                        var tile = tiles[key], filtered = {}, symbolLayers = {}, any = false;
+                        m.layers.forEach(function (layerIndex) {
+                            delete tile.filtered[layerIndex];
+                            var styleLayer = renderer._style.layers[layerIndex];
+                            if (!styleLayer || styleLayer.type !== 'symbol') return;
+                            var layer = tile.layers[styleLayer['source-layer']];
+                            if (!layer) return;
+                            any = true;
+                            if (shared.filterUsesZoom(styleLayer.filter)) { symbolLayers[layer.name] = layer; return; }
+                            filtered[layerIndex] = layer.features.filter(function (f) { return shared.filterMatches(styleLayer.filter, f, 0); });
+                        });
+                        if (any) self.postMessage({ type: 'refiltered', key: key, filtered: filtered, layers: symbolLayers });
+                    });
                     break;
 
                 case 'abort':
@@ -850,7 +869,7 @@
                     var d = { entry: tile, x0: m.d.x0, y0: m.d.y0, sx: m.d.sx, sy: m.d.sy, clip: m.d.clip };
                     renderer.renderTile(ctx, m.sourceId, d, m.zoom);
                     var bitmap = canvas.transferToImageBitmap();
-                    self.postMessage({ type: 'rendered', key: m.key, zoomKey: m.zoomKey, tileKey: m.tileKey, layerRect: m.layerRect, bitmap: bitmap }, [bitmap]);
+                    self.postMessage({ type: 'rendered', key: m.key, zoomKey: m.zoomKey, tileKey: m.tileKey, layerRect: m.layerRect, mapZoom: m.mapZoom, bitmap: bitmap }, [bitmap]);
                     break;
             }
         };
@@ -1021,7 +1040,13 @@
             lowPower: false,
             // fetch options, e.g. { credentials: 'include' } or { headers: { Authorization: ... } }
             fetchOptions: {},
-            attribution: null
+            // null: the attribution of the sources (TileJSON attribution, ESRI copyrightText)
+            attribution: null,
+            opacity: 1,
+            zIndex: null,
+            // the layer is only shown within these map zoom levels (null: always)
+            minZoom: null,
+            maxZoom: null
         },
 
         /**
@@ -1038,6 +1063,10 @@
                 this.options.style = url;
                 url = '';
             }
+            if (this.options.style && typeof this.options.style === 'object') {
+                this._styleObject = this.options.style;
+                this.options.style = null;
+            }
             this._url = url.replace(/\/+$/, '');
             this._tiles = {};        // key → { status, layers, used, filtered }
             this._tileOrder = [];
@@ -1049,6 +1078,7 @@
             this._renderer = new gvs.TileRenderer();
             this._worker = null;     // the render worker (one source, supported browser)
             this._rendering = {};    // image key → zoomKey of a render job running in the worker
+            this._styleVersion = 0;  // incremented by style changes at runtime (part of zoomKey)
             this._images = {};       // tile images: key → { canvas, zoomKey, entry }
             this._renderQueue = {};  // tile images to (re)render: key → { sourceId, d, zoom }
             this._pending = [];      // tile requests waiting: [{ key, sourceId, t, priority }]
@@ -1058,6 +1088,9 @@
             this._placed = [];       // the labels placed at the last redraw (see _placeSymbols)
             this._visibleKeys = {};  // tile keys on the canvas (not preloaded ones)
             this._tileShownAt = {};  // tile image key → time it was first drawn (fading in)
+            this._sourceAttributions = {};   // source id → attribution (HTML)
+            this._autoAttribution = null;
+            this._loading = false;
             this._shownIds = {};     // label text|icon → last time shown (no fading in after a zoom step)
             this._shown = {};        // label position keys shown at the last redraw: they keep their place
             this._shownZoom = null;
@@ -1092,6 +1125,8 @@
             this._labelCanvas.style.pointerEvents = 'none';
             this.getPane().appendChild(this._labelCanvas);
             this._labelCtx = this._labelCanvas.getContext('2d');
+            this._applyOpacity();
+            this._applyZIndex();
 
             this._resize();
             this._ready = this._ready || this._loadStyle();
@@ -1121,10 +1156,197 @@
         },
 
         getAttribution: function () {
-            return this.options.attribution;
+            return this.options.attribution || this._autoAttribution;
         },
 
-        /** The loaded GL style (after the 'load' event). */
+        setOpacity: function (opacity) {
+            this.options.opacity = opacity;
+            this._applyOpacity();
+            return this;
+        },
+
+        setZIndex: function (zIndex) {
+            this.options.zIndex = zIndex;
+            this._applyZIndex();
+            return this;
+        },
+
+        _applyOpacity: function () {
+            var o = this.options.opacity === undefined || this.options.opacity === null ? 1 : this.options.opacity;
+            if (this._canvas) this._canvas.style.opacity = o;
+            if (this._labelCanvas) this._labelCanvas.style.opacity = o;
+        },
+
+        _applyZIndex: function () {
+            var z = this.options.zIndex;
+            if (this._canvas) this._canvas.style.zIndex = z === null || z === undefined ? '' : z;
+            if (this._labelCanvas) this._labelCanvas.style.zIndex = z === null || z === undefined ? '' : z;
+        },
+
+        // ---------------------------------------------------------------- style at runtime
+
+        /**
+         * The style layers: [{ id, type, source, sourceLayer, visible, minzoom, maxzoom, metadata }].
+         * Style layers are addressed by id, an array of ids, a RegExp (tested on the id) or a function(styleLayer).
+         */
+        getLayers: function () {
+            return (this._style ? this._style.layers : []).map(function (l) {
+                return {
+                    id: l.id, type: l.type, source: l.source, sourceLayer: l['source-layer'],
+                    visible: (l.layout || {}).visibility !== 'none', minzoom: l.minzoom, maxzoom: l.maxzoom, metadata: l.metadata
+                };
+            });
+        },
+
+        getLayerVisibility: function (id) {
+            var l = this._findLayers(id)[0];
+            return l ? (l.layout || {}).visibility !== 'none' : null;
+        },
+
+        setLayerVisibility: function (layers, visible) {
+            return this.setLayoutProperty(layers, 'visibility', visible ? 'visible' : 'none');
+        },
+
+        setLayoutProperty: function (layers, name, value) {
+            return this._changeLayers(layers, function (l) {
+                l.layout = l.layout || {};
+                if (value === undefined || value === null) delete l.layout[name]; else l.layout[name] = value;
+            }, false);
+        },
+
+        setPaintProperty: function (layers, name, value) {
+            return this._changeLayers(layers, function (l) {
+                l.paint = l.paint || {};
+                if (value === undefined || value === null) delete l.paint[name]; else l.paint[name] = value;
+            }, false);
+        },
+
+        setFilter: function (layers, filter) {
+            return this._changeLayers(layers, function (l) {
+                if (filter === undefined || filter === null) delete l.filter; else l.filter = filter;
+            }, true);
+        },
+
+        /** Another style: a style URL (any GL style, or a gView vtc service URL) or a style object. */
+        setStyle: function (style) {
+            var map = this._map;
+            if (map) map.removeLayer(this);
+            this._resetStyle();
+            this._styleObject = null;
+            this._url = '';
+            this.options.style = null;
+            if (style && typeof style === 'object') this._styleObject = style;
+            else if (/\.json(\?|$)/i.test(style || '')) this.options.style = style;
+            else this._url = (style || '').replace(/\/+$/, '');
+            if (map) map.addLayer(this);
+            return this;
+        },
+
+        _findLayers: function (match) {
+            var layers = this._style ? this._style.layers : [];
+            if (typeof match === 'function') return layers.filter(match);
+            if (match instanceof RegExp) return layers.filter(function (l) { return match.test(l.id); });
+            var ids = Array.isArray(match) ? match : [match];
+            return layers.filter(function (l) { return ids.indexOf(l.id) >= 0; });
+        },
+
+        _changeLayers: function (match, change, filterChanged) {
+            if (!this._style) throw new Error('leaflet-gl-vectortiles: the style is not loaded yet (event "styleload")');
+            var layers = this._style.layers, indices = [];
+            this._findLayers(match).forEach(function (l) {
+                change(l);
+                delete l._gvDataDriven;   // cached in the shared code
+                indices.push(layers.indexOf(l));
+            });
+            if (indices.length) this._restyle(indices, filterChanged);
+            return this;
+        },
+
+        // after changes of style layers: tile images are rendered again (the old ones stay until then), labels
+        // placed again; changed filters drop the cached filter results
+        _restyle: function (indices, filterChanged) {
+            var self = this;
+            this._markIconsInTiles(this._style);
+            this._renderer.setStyle(this._style);
+            if (this._worker) {
+                this._worker.postMessage({ type: 'style', style: this._style });
+                if (filterChanged) this._worker.postMessage({ type: 'refilter', layers: indices });
+            }
+            if (filterChanged) {
+                Object.keys(this._tiles).forEach(function (key) {
+                    var entry = self._tiles[key];
+                    indices.forEach(function (i) { delete entry.filtered[i]; });
+                });
+            }
+            this._styleVersion++;   // images and running render jobs of the old style are outdated
+            if (this._map) this._redraw();
+        },
+
+        // everything of the current style: setStyle loads it all again
+        _resetStyle: function () {
+            if (this._worker) this._worker.terminate();
+            this._worker = null;
+            this._ready = null;
+            this._style = null;
+            this._sources = {};
+            this._sprite = null;
+            this._patterns = {};
+            this._tinted = {};
+            this._renderer = new gvs.TileRenderer();
+            this._tiles = {};
+            this._tileOrder = [];
+            this._images = {};
+            this._rendering = {};
+            this._renderQueue = {};
+            this._pending = [];
+            this._active = 0;
+            this._placed = [];
+            this._shown = {};
+            this._shownIds = {};
+            this._tileShownAt = {};
+            this._visibleKeys = {};
+            this._sourceAttributions = {};
+            this._autoAttribution = null;
+            this._loading = false;
+        },
+
+        // ---------------------------------------------------------------- attribution, loading events
+
+        // the attribution of the sources, if the layer has none of its own
+        _updateAttribution: function () {
+            var seen = {}, self = this;
+            var text = Object.keys(this._sourceAttributions).map(function (id) { return self._sourceAttributions[id]; })
+                .filter(function (a) { if (!a || seen[a]) return false; seen[a] = true; return true; }).join(' | ') || null;
+            var old = this._autoAttribution;
+            this._autoAttribution = text;
+            var control = this._map && this._map.attributionControl;
+            if (this.options.attribution || !control || old === text) return;
+            if (old) control.removeAttribution(old);
+            if (text) control.addAttribution(text);
+        },
+
+        // 'loading' when visible tiles start to load, 'load' when all visible tiles are loaded and rendered
+        _checkLoading: function (startOnly) {
+            var busy = Object.keys(this._rendering).length > 0, visible = this._visibleKeys;
+            for (var key in visible) {
+                var entry = this._tiles[key];
+                if (!entry || entry.status === 'loading') { busy = true; break; }
+            }
+            if (busy && !this._loading) {
+                this._loading = true;
+                this.fire('loading');
+            } else if (!busy && this._loading && !startOnly) {
+                this._loading = false;
+                this.fire('load');
+            }
+        },
+
+        _tileError: function (key, entry, error) {
+            this.fire('tileerror', { key: key, url: entry && entry.url, error: error });
+            this._checkLoading();
+        },
+
+        /** The loaded GL style (after the 'styleload' event). */
         getStyle: function () { return this._style; },
 
         /** The tile grid of the (first) gView source: { epsg, origin, resolutions, tileSize, extent, webmercator }. */
@@ -1163,8 +1385,9 @@
             var styleUrl = this.options.style || (this._url + '/style.json' + (epsg ? '?epsg=' + epsg : ''));
             styleUrl = resolveUrl(styleUrl, window.location.href);
             var self = this;
+            if (this._styleObject) styleUrl = window.location.href;   // relative URLs in a style object: to the page
 
-            return this._fetchJson(styleUrl)
+            return (this._styleObject ? Promise.resolve(this._styleObject) : this._fetchJson(styleUrl))
                 .then(function (style) {
                     self._style = style;
                     self._markIconsInTiles(style);
@@ -1179,11 +1402,12 @@
                         .map(function (id) { return self._loadSource(id, style.sources[id], styleUrl, gviewGrid); }));
                 })
                 .then(function () {
+                    self._updateAttribution();
                     var sprite = self._style.sprite;
                     return sprite && typeof sprite === 'string' ? self._loadSprite(resolveUrl(sprite, styleUrl)) : null;
                 })
                 .then(function () { return self._startWorker(); })
-                .then(function () { self.fire('load', { style: self._style }); });
+                .then(function () { self.fire('styleload', { style: self._style }); });
         },
 
         _loadSource: function (id, source, styleUrl, gviewGrid) {
@@ -1197,6 +1421,7 @@
                 var zooms = gviewGrid.webmercator
                     ? gviewGrid.resolutions.map(function (r) { return Math.round(Math.log(156543.03392804097 / (r * gviewGrid.tileSize[0] / 256)) / Math.LN2); })
                     : gviewGrid.resolutions.map(function (r, i) { return i; });
+                if (source.attribution) this._sourceAttributions[id] = source.attribution;
                 this._sources[id] = {
                     gview: true, grid: gviewGrid, zooms: zooms, tileUrl: resolveUrl(source.tiles[0], styleUrl),
                     minLevel: 0, maxLevel: gviewGrid.resolutions.length - 1
@@ -1222,6 +1447,12 @@
 
             return resolved.then(function (r) {
                 var info = r.info || {};
+                // TileJSON: attribution (HTML); ESRI: copyrightText (text)
+                var attribution = source.attribution || info.attribution ||
+                    (info.copyrightText ? String(info.copyrightText).replace(/[&<>"]/g, function (c) {
+                        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+                    }) : null);
+                if (attribution) self._sourceAttributions[id] = attribution;
                 var tileSize = source.tileSize || (info.tileInfo && info.tileInfo.rows) || info.tileSize || 512;
                 var minLevel = source.minzoom !== undefined ? source.minzoom : (info.minzoom || 0);
                 // ESRI: tiles exist up to maxLOD (the style's maxzoom is the display limit)
@@ -1322,8 +1553,18 @@
                     break;
                 case 'error':
                     this._active--;
-                    if (entry) entry.status = 'error';
+                    if (entry) {
+                        entry.status = 'error';
+                        this._tileError(m.key, entry, new Error(m.error || 'tile request failed'));
+                    }
                     this._pump();
+                    break;
+                case 'refiltered':
+                    if (entry && entry.layers) {
+                        for (var i in m.filtered) entry.filtered[i] = m.filtered[i];
+                        for (var name in m.layers) entry.layers[name] = m.layers[name];
+                        this._scheduleRedraw();
+                    }
                     break;
                 case 'aborted':
                     this._active--;
@@ -1334,9 +1575,10 @@
                     if (m.bitmap) {
                         var old = this._images[m.key];
                         if (old && old.canvas.close) old.canvas.close();
-                        this._images[m.key] = { canvas: m.bitmap, zoomKey: m.zoomKey, entry: this._tiles[m.tileKey], layerRect: m.layerRect };
+                        this._images[m.key] = { canvas: m.bitmap, zoomKey: m.zoomKey, entry: this._tiles[m.tileKey], layerRect: m.layerRect, mapZoom: m.mapZoom };
                     }
                     this._scheduleRedraw();
+                    this._checkLoading();
                     break;
             }
         },
@@ -1481,8 +1723,31 @@
 
         _update: function () {
             if (!this._map || !this._canvas || !this._style || !this._validResolution()) return;
+            if (this._outsideZoom()) {
+                this._clearCanvases();
+                return;
+            }
             this._requestTiles();
             this._redraw();
+        },
+
+        // outside the layer's minZoom/maxZoom: nothing drawn, nothing loaded
+        _outsideZoom: function () {
+            var z = this._map.getZoom(), o = this.options;
+            return (o.minZoom !== null && o.minZoom !== undefined && z < o.minZoom) ||
+                (o.maxZoom !== null && o.maxZoom !== undefined && z > o.maxZoom);
+        },
+
+        _clearCanvases: function () {
+            [this._ctx, this._labelCtx].forEach(function (ctx) {
+                if (!ctx) return;
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+            });
+            this._placed = [];
+            this._visibleKeys = {};
+            this._pending = [];
+            if (this._loading) { this._loading = false; this.fire('load'); }
         },
 
         // panning (dragging, inertia): the canvases move with the map pane, labels are not placed again
@@ -1663,6 +1928,7 @@
             this._pending = pending;
             this._pump();
             this._pruneCache();
+            this._checkLoading(true);
         },
 
         _pump: function () {
@@ -1678,25 +1944,26 @@
             var self = this, source = this._sources[job.sourceId];
 
             if (this._worker) {
-                this._tiles[job.key] = { status: 'loading', layers: null, used: Date.now(), filtered: {}, inWorker: true };
+                var url = this._tileUrlFor(source, job.t);
+                this._tiles[job.key] = { status: 'loading', layers: null, used: Date.now(), filtered: {}, inWorker: true, url: url };
                 this._tileOrder.push(job.key);
                 this._active++;
                 this._worker.postMessage({
-                    type: 'load', key: job.key, url: this._tileUrlFor(source, job.t),
+                    type: 'load', key: job.key, url: url,
                     fetchOptions: this.options.fetchOptions
                 });
                 return;
             }
 
             var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-            var entry = this._tiles[job.key] = { status: 'loading', layers: null, used: Date.now(), filtered: {}, controller: controller };
+            var entry = this._tiles[job.key] = { status: 'loading', layers: null, used: Date.now(), filtered: {}, controller: controller, url: this._tileUrlFor(source, job.t) };
             this._tileOrder.push(job.key);
             this._active++;
 
             var options = L.extend({}, this.options.fetchOptions);
             if (controller) options.signal = controller.signal;
 
-            fetch(this._tileUrlFor(source, job.t), options)
+            fetch(entry.url, options)
                 .then(function (r) {
                     // 204 (gView) and 404 (ESRI, outside the data) are empty tiles
                     if (r.status === 204 || r.status === 404) return new ArrayBuffer(0);
@@ -1709,9 +1976,11 @@
                     entry.controller = null;
                     self._scheduleRedraw();
                 })
-                .catch(function () {
+                .catch(function (error) {
+                    var aborted = error && error.name === 'AbortError';
                     entry.status = 'error';
                     entry.controller = null;
+                    if (!aborted && self._tiles[job.key] === entry) self._tileError(job.key, entry, error);
                 })
                 .then(function () {
                     self._active--;
@@ -1764,6 +2033,7 @@
 
         _redraw: function () {
             if (!this._ctx || !this._style || !this._validResolution()) return;
+            if (this._outsideZoom()) return this._clearCanvases();
             this._lastRedraw = Date.now();
 
             // the canvases at the current view (not during a zoom animation: they are scaled by CSS then)
@@ -1841,13 +2111,15 @@
                 current.drawables.forEach(function (d) {
                     var image = self._tileImage(id, d, current.zoom, usedImages);
                     if (image && image.layerRect) {
-                        // overzoomed part rendered in the worker: placed by its layer coordinates
-                        var origin = self._layerOrigin();
+                        // overzoomed part rendered in the worker: placed by its map pixels at the zoom it was rendered
+                        // for, scaled to the current zoom (the image of a slightly different zoom, until the new one)
+                        var origin = self._layerOrigin().add(self._map.getPixelOrigin());
+                        var scale = self._map.getZoomScale(self._map.getZoom(), image.mapZoom), lr = image.layerRect;
                         ctx.save();
                         ctx.beginPath();
                         ctx.rect(d.clip[0], d.clip[1], d.clip[2], d.clip[3]);
                         ctx.clip();
-                        ctx.drawImage(image.canvas, image.layerRect[0] - origin.x, image.layerRect[1] - origin.y, image.layerRect[2], image.layerRect[3]);
+                        ctx.drawImage(image.canvas, lr[0] * scale - origin.x, lr[1] * scale - origin.y, lr[2] * scale, lr[3] * scale);
                         ctx.restore();
                         return;
                     }
@@ -1879,6 +2151,7 @@
                 Object.keys(this._images).forEach(function (key) { if (!usedImages[key] && !self._rendering[key]) self._dropImage(key); });
                 this._scheduleRender();
             }
+            this._checkLoading();
 
             // labels: placed again on every redraw, except while panning (they move with the map, the labels of
             // newly visible parts are placed when the browser has time)
@@ -1922,7 +2195,8 @@
         },
 
         _tileImage: function (sourceId, d, zoom, usedImages) {
-            var zoomKey = Math.round(zoom * 2) / 2;
+            // half zoom steps; the style version: images of an older style are rendered again
+            var zoomKey = Math.round(zoom * 2) / 2 + '@' + this._styleVersion;
             var key = sourceId + '|' + d.req.level + '/' + d.req.row + '/' + d.req.col;
             usedImages[key] = true;
 
@@ -1932,17 +2206,18 @@
             if (d.clip[2] * ratio > 4096 || d.clip[3] * ratio > 4096) {
                 // overzoomed far beyond the cache: the whole tile would be a huge image
                 if (!this._worker) return null;   // main thread: drawn directly
-                // worker: only the visible part of the tile, positioned in layer coordinates (stable while panning)
-                var size = this._canvasSize(), origin = this._layerOrigin();
+                // worker: only the visible part of the tile, positioned in map pixels at the exact map zoom (stable
+                // while panning; layer pixels change with the pixel origin at each zoom)
+                var size = this._canvasSize(), origin = this._layerOrigin().add(this._map.getPixelOrigin()), mapZoom = this._map.getZoom();
                 var vx = Math.max(0, d.clip[0]), vy = Math.max(0, d.clip[1]);
                 var vw = Math.min(size.x, d.clip[0] + d.clip[2]) - vx, vh = Math.min(size.y, d.clip[1] + d.clip[3]) - vy;
                 if (vw <= 0 || vh <= 0) return undefined;
                 var rect = [vx + origin.x, vy + origin.y, vw, vh];
-                var covers = cached && cached.layerRect && cached.zoomKey === zoomKey && cached.entry === d.entry &&
+                var covers = cached && cached.layerRect && cached.zoomKey === zoomKey && cached.mapZoom === mapZoom && cached.entry === d.entry &&
                     cached.layerRect[0] <= rect[0] + 0.5 && cached.layerRect[1] <= rect[1] + 0.5 &&
                     cached.layerRect[0] + cached.layerRect[2] >= rect[0] + rect[2] - 0.5 && cached.layerRect[1] + cached.layerRect[3] >= rect[1] + rect[3] - 0.5;
                 if (!covers) {
-                    this._renderQueue[key] = { sourceId: sourceId, d: d, zoom: zoom, zoomKey: zoomKey, view: [vx, vy, vw, vh], layerRect: rect };
+                    this._renderQueue[key] = { sourceId: sourceId, d: d, zoom: zoom, zoomKey: zoomKey, view: [vx, vy, vw, vh], layerRect: rect, mapZoom: mapZoom };
                 }
                 return cached && cached.layerRect ? cached : undefined;   // drawn at its layer rect
             }
@@ -1974,7 +2249,7 @@
                 running++;
                 self._worker.postMessage({
                     type: 'render', key: key, tileKey: self._key(job.sourceId, job.d.tile), sourceId: job.sourceId,
-                    zoom: job.zoom, zoomKey: job.zoomKey, w: w, h: h, view: view, layerRect: job.layerRect || null,
+                    zoom: job.zoom, zoomKey: job.zoomKey, w: w, h: h, view: view, layerRect: job.layerRect || null, mapZoom: job.mapZoom,
                     d: { x0: job.d.x0, y0: job.d.y0, sx: job.d.sx, sy: job.d.sy, clip: job.d.clip }
                 });
             });

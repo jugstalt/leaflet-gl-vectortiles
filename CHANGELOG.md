@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+**Breaking:** the event `load` now means "all visible tiles loaded and drawn" (as Leaflet's tile layers); the style
+is loaded at `styleload`.
+
+- Style at runtime: `getLayers`, `getLayerVisibility`, `setLayerVisibility`, `setLayoutProperty`,
+  `setPaintProperty`, `setFilter` (style layers by id, ids, RegExp or function), `setStyle` (URL or object; a style
+  object can also be passed as option `style`).
+- Events `styleload`, `loading`, `load`, `tileerror`.
+- Attribution from the sources (TileJSON `attribution`, ESRI `copyrightText`) when the option is not set.
+- Options `opacity`, `zIndex`, `minZoom`, `maxZoom`; methods `setOpacity`, `setZIndex`.
+- Example page: themes (style layers grouped) to switch, loading indicator.
+
 - Labels and icons on their own canvas: during a zoom animation they keep their size and move with the map
   (frame by frame), instead of being scaled with the tile images.
 - Labels are drawn from cached images (text with halo, glyphs, icons cut out of the sprite sheet): no text
@@ -24,6 +35,8 @@
   of basemap.at in Vienna takes about 10–20 ms instead of 45 ms.
 - Map handler `smoothWheelZoom` (map options `smoothWheelZoom: true`, `smoothWheelSpeed`): continuous wheel zoom
   around the mouse position.
+- Fix: far overzoomed tiles (only the visible part rendered) were drawn at the position and size of the zoom they
+  were rendered for within the same half zoom step: layers drawn on top of each other did not match until panned.
 - Fix: tile URLs relative to a TileJSON file (`…/tiles.json`) are resolved against its folder, not against the
   file as if it were a folder (e.g. BEV Kataster `../../tiles/…`).
 - Example page: service presets (basemap.at, BEV Kataster), several styles on top of each other,
