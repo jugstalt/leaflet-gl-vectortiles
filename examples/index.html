@@ -41,6 +41,7 @@
   </label>
   <label><input id="osm" type="checkbox"> OpenStreetMap background (WebMercator only)</label>
   <label><input id="smooth" type="checkbox" checked> smooth wheel zoom</label>
+  <label><input id="lowpower" type="checkbox"> low power (economical rendering)</label>
   <label><input id="debug" type="checkbox"> show tile grid</label>
   <label><input id="declutter" type="checkbox" checked> declutter labels</label>
   <button id="load">Load</button>
@@ -145,6 +146,7 @@
         epsg: grid ? grid.epsg : null,
         debug: $('debug').checked,
         declutter: $('declutter').checked,
+        lowPower: $('lowpower').checked,
         attribution: Object.entries(attributions).find(([host]) => url.includes(host))?.[1]
       });
       layer.on('error', e => status('Error: ' + e.error.message));

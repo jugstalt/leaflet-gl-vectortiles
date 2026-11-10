@@ -109,6 +109,8 @@ otherwise zooming beyond it gives no scale in Leaflet.
 | `renderBudget` | `12` | milliseconds per frame for rendering tile images on the main thread (fallback) |
 | `maxCachedTiles` | `384` | tiles kept in memory |
 | `liveRedrawInterval` | `150` | milliseconds between redraws while the map is dragged or zoomed without animation (pinch, smooth wheel zoom): tiles are loaded and drawn during the gesture; `0`: only at its end |
+| `maxPixelRatio` | `null` | render at most at this device pixel ratio, e.g. `1` on high-DPI screens; `null`: the screen's |
+| `lowPower` | `false` | economical defaults for weak clients, see [Performance](#performance) |
 | `padding` | `0.15` | the canvas reaches this part of the map size beyond each edge, so panning shows map there at once |
 | `fetchOptions` | `{}` | options for `fetch`, e.g. `{ credentials: 'include' }` or headers for authorization |
 | `debug` | `false` | draw the tile borders and coordinates |
@@ -133,6 +135,27 @@ const map = L.map('map', {
 
 While zooming this way (or pinching on a touch screen), and while the map is dragged, tiles are loaded and the map
 is redrawn every `liveRedrawInterval` ms.
+
+### Performance
+
+The defaults aim at a smooth map on desktop computers. For weak clients (old laptops, thin clients, terminal
+servers without GPU) `lowPower: true` sets economical defaults; options set explicitly take precedence:
+
+```js
+L.glVectorTiles(url, { lowPower: true, padding: 0.1 })   // economical, but with a little padding
+```
+
+| Option | Default | `lowPower` | Effect |
+|---|---|---|---|
+| `maxPixelRatio` | screen | `1` | biggest lever: at a device pixel ratio of 2 (3) there are 4 (9) times the pixels to render; less sharp |
+| `liveRedrawInterval` | `150` | `0` | no loading and drawing during gestures, only at their end |
+| `padding` | `0.15` | `0` | the canvas is only as big as the map: less memory, panning shows empty edges until the end |
+| `maxCachedTiles` | `384` | `128` | less memory, tiles are loaded again more often |
+| `maxConcurrentRequests` | `8` | `4` | fewer parallel downloads |
+| `maxConcurrentRenders` | `4` | `2` | fewer tile images rendered at the same time in the worker |
+
+Keep `worker: true`: rendering in the web worker keeps the page responsive also on weak clients. The smooth wheel
+zoom (map option `smoothWheelZoom`) is off by default.
 
 ## Limits
 

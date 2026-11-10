@@ -847,6 +847,16 @@
     // The layer
     // ------------------------------------------------------------------------------------------
 
+    // option lowPower: fewer pixels, no redraws during gestures, less memory and parallel work
+    var LOW_POWER = {
+        maxPixelRatio: 1,
+        padding: 0,
+        liveRedrawInterval: 0,
+        maxCachedTiles: 128,
+        maxConcurrentRequests: 4,
+        maxConcurrentRenders: 2
+    };
+
     var GLVectorTiles = L.Layer.extend({
         options: {
             // EPSG code of a gView cache; default: the map's crs.code
@@ -873,6 +883,11 @@
             liveRedrawInterval: 150,
             // the canvas reaches this part of the map size beyond each edge: panning shows map there at once
             padding: 0.15,
+            // render at most at this device pixel ratio (e.g. 1 on high-DPI screens: less sharp, a fraction of
+            // the pixels to render); null = the screen's ratio
+            maxPixelRatio: null,
+            // economical defaults for weak clients (see LOW_POWER); options set explicitly take precedence
+            lowPower: false,
             // fetch options, e.g. { credentials: 'include' } or { headers: { Authorization: ... } }
             fetchOptions: {},
             attribution: null
@@ -883,6 +898,9 @@
          *             or the URL of any GL style (…/style.json, …/root.json)
          */
         initialize: function (url, options) {
+            if (options && options.lowPower) {
+                options = L.extend({}, LOW_POWER, options);
+            }
             L.setOptions(this, options);
             url = url || '';
             if (/\.json(\?|$)/i.test(url) && !this.options.style) {
@@ -1097,7 +1115,7 @@
         },
 
         _loadSprite: function (spriteUrl) {
-            var ratio = (window.devicePixelRatio || 1) > 1 ? 2 : 1, suffix = ratio === 2 ? '@2x' : '';
+            var ratio = this._ratio() > 1 ? 2 : 1, suffix = ratio === 2 ? '@2x' : '';
             var self = this;
             return this._fetchJson(spriteUrl + suffix + '.json')
                 .then(function (index) {
@@ -1194,6 +1212,12 @@
             delete this._images[key];
         },
 
+        // device pixels per CSS pixel to render with
+        _ratio: function () {
+            var ratio = window.devicePixelRatio || 1, max = this.options.maxPixelRatio;
+            return max > 0 ? Math.min(ratio, max) : ratio;
+        },
+
         // the canvas: the map size plus padding on each side; its top left corner in layer pixels
         _pad: function () {
             return this._map.getSize().multiplyBy(this.options.padding || 0).round();
@@ -1211,7 +1235,7 @@
 
         _resize: function () {
             if (!this._canvas) return;
-            var size = this._canvasSize(), ratio = window.devicePixelRatio || 1;
+            var size = this._canvasSize(), ratio = this._ratio();
             this._canvas.width = Math.round(size.x * ratio);
             this._canvas.height = Math.round(size.y * ratio);
             this._canvas.style.width = size.x + 'px';
@@ -1571,7 +1595,7 @@
                 L.DomUtil.setPosition(this._labelCanvas, this._canvasOrigin);
             }
 
-            var ctx = this._ctx, ratio = window.devicePixelRatio || 1, size = this._canvasSize();
+            var ctx = this._ctx, ratio = this._ratio(), size = this._canvasSize();
             ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
             ctx.clearRect(0, 0, size.x, size.y);
 
@@ -1713,7 +1737,7 @@
             var key = sourceId + '|' + d.req.level + '/' + d.req.row + '/' + d.req.col;
             usedImages[key] = true;
 
-            var ratio = window.devicePixelRatio || 1;
+            var ratio = this._ratio();
             var cached = this._images[key];
 
             if (d.clip[2] * ratio > 4096 || d.clip[3] * ratio > 4096) {
@@ -1743,7 +1767,7 @@
         // render jobs to the worker, nearest to the center first, a few at a time
         _sendRenderJobs: function () {
             var size = this._canvasSize(), cx = size.x / 2, cy = size.y / 2, queue = this._renderQueue, self = this;
-            var ratio = window.devicePixelRatio || 1;
+            var ratio = this._ratio();
             var keys = Object.keys(queue).sort(function (a, b) {
                 var da = queue[a].d.clip, db = queue[b].d.clip;
                 return Math.hypot(da[0] + da[2] / 2 - cx, da[1] + da[3] / 2 - cy) - Math.hypot(db[0] + db[2] / 2 - cx, db[1] + db[3] / 2 - cy);
@@ -1768,7 +1792,7 @@
         },
 
         _renderTileImage: function (key, job) {
-            var d = job.d, ratio = window.devicePixelRatio || 1;
+            var d = job.d, ratio = this._ratio();
             var w = Math.max(1, Math.round(d.clip[2] * ratio)), h = Math.max(1, Math.round(d.clip[3] * ratio));
 
             var cached = this._images[key];
@@ -2167,7 +2191,7 @@
             var sprite = this._sprites[key];
             if (sprite) return sprite;
             if (this._spriteCount > 3000) { this._sprites = {}; this._spriteCount = 0; }
-            var ratio = window.devicePixelRatio || 1;
+            var ratio = this._ratio();
             var canvas = document.createElement('canvas');
             canvas.width = Math.max(1, Math.ceil((w + 2 * pad) * ratio));
             canvas.height = Math.max(1, Math.ceil((h + 2 * pad) * ratio));
@@ -2237,7 +2261,7 @@
         _paintLabels: function () {
             var ctx = this._labelCtx;
             if (!ctx || !this._map) return;
-            var ratio = window.devicePixelRatio || 1, size = this._canvasSize();
+            var ratio = this._ratio(), size = this._canvasSize();
             ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
             ctx.clearRect(0, 0, size.x, size.y);
             if (!this._placed.length) return;

@@ -11,6 +11,9 @@
   `liveRedrawInterval` ms.
 - Smooth panning: while the map is dragged, labels move with it and are not placed again (new ones when the map
   rests for a moment or at the end); the canvas is only redrawn when new tiles arrive or the padding runs out.
+- Option `maxPixelRatio`: render at most at this device pixel ratio (e.g. 1 on high-DPI screens).
+- Option `lowPower`: economical defaults for weak clients (`maxPixelRatio: 1`, `padding: 0`,
+  `liveRedrawInterval: 0`, fewer cached tiles and parallel requests/renders).
 - Option `padding` (default 0.15): the canvas reaches beyond the map's edges, panning shows map there at once.
 - Faster redraws: labels are only collected where they can be seen (tiles reach far beyond the canvas); a redraw
   of basemap.at in Vienna takes about 10–20 ms instead of 45 ms.
