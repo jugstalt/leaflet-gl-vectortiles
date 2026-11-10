@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.1
 
 - Tile images are rendered in software on the worker thread (option `gpuTileRendering`, default false): Chrome and
   Edge rasterize a 2D OffscreenCanvas on the GPU, and the thousands of small paths of dense vector tiles kept the
