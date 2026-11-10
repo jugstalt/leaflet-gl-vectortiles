@@ -104,3 +104,24 @@ test('text along a line: letter spacing, too long, too sharp a bend', () => {
     assert.equal(placeAlongPath(measure, 'ABCD', [[0, 0], [100, 0], [100, 100]], 100, Math.PI / 8, 0), null, 'a right angle in the middle');
     assert.ok(placeAlongPath(measure, 'ABCD', [[0, 0], [100, 0], [100, 100]], 100, Math.PI, 0), 'allowed with a large max angle');
 });
+
+test('runs: consecutive geometry layers of one source, labels and backgrounds left out', () => {
+    const layer = Object.create(plugin.prototype);
+    const style = { layers: [
+        { id: 'bg', type: 'background' },
+        { id: 'land', type: 'fill', source: 'landcover' },
+        { id: 'water', type: 'fill', source: 'base' },
+        { id: 'roads', type: 'line', source: 'base' },
+        { id: 'labels', type: 'symbol', source: 'base' },
+        { id: 'forest', type: 'fill', source: 'landcover' },
+        { id: 'dots', type: 'symbol', source: 'landcover', 'gview:inTile': true },
+        { id: 'names', type: 'symbol', source: 'landcover' },
+        { id: 'bridges', type: 'line', source: 'base' }
+    ] };
+    assert.deepEqual(plain(layer._buildRuns(style)), [
+        { source: 'landcover', from: 1, to: 1, index: 0 },
+        { source: 'base', from: 2, to: 3, index: 1 },
+        { source: 'landcover', from: 5, to: 6, index: 2 },
+        { source: 'base', from: 8, to: 8, index: 3 }
+    ]);
+});

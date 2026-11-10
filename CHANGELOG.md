@@ -14,6 +14,13 @@
   TileJSON given as style gets a clear error.
 - A source that can't be loaded no longer stops the style: an `error` event (`e.source`), the other sources are drawn.
 - Example page: presets for basemap.de, OpenFreeMap (Liberty, Positron) and VersaTiles.
+- Styles with several sources render in the worker too, with the tile image cache: consecutive style layers of
+  one source ("runs") get one image per tile (VersaTiles: a redraw ~100 ms instead of ~700 ms on the main thread).
+- Faster labels: a label along a line is drawn once into its own image (one image per frame instead of one per
+  glyph and halo; kept while the label stays), labels that are invisible at the zoom (size or opacity 0) are not
+  placed, points outside the canvas are skipped before the style is evaluated, line labels whose anchor already
+  collides skip the glyph layout, paint/layout values that don't depend on the feature are evaluated once per
+  zoom, colors are parsed once.
 - Fix: legacy identity functions (`{ "type": "identity", "property": "…" }`, without stops) were not evaluated.
 
 ## 0.2.0

@@ -208,8 +208,20 @@
             return [c(h + 1 / 3) * 255, c(h) * 255, c(h - 1 / 3) * 255];
         }
 
+        var colorCache = {}, colorCacheSize = 0;
+
         function parseColor(value) {
             if (typeof value !== 'string') return null;
+            var cached = colorCache[value];
+            if (cached !== undefined) return cached && cached.slice();
+            if (colorCacheSize > 2000) { colorCache = {}; colorCacheSize = 0; }
+            colorCacheSize++;
+            var parsed = parseColorText(value);
+            colorCache[value] = parsed;
+            return parsed && parsed.slice();
+        }
+
+        function parseColorText(value) {
             var s = value.trim().toLowerCase();
             if (NAMED_COLORS[s]) return NAMED_COLORS[s].slice();
             var m = /^#([0-9a-f]{3,8})$/.exec(s);
@@ -650,9 +662,13 @@
             setSprite: function (sprite) { this._sprite = sprite; this._patterns = {}; this._tintedIcons = {}; },
 
             // all geometry layers of a source for one tile (d: { entry, x0, y0, sx, sy, clip })
-            renderTile: function (ctx, sourceId, d, zoom) {
+            // the geometry layers of a source for one tile, optionally only the style layers from..to (a run)
+            renderTile: function (ctx, sourceId, d, zoom, from, to) {
                 var self = this;
+                if (from === undefined || from === null) from = 0;
+                if (to === undefined || to === null) to = this._style.layers.length - 1;
                 this._style.layers.forEach(function (styleLayer, layerIndex) {
+                    if (layerIndex < from || layerIndex > to) return;
                     if (styleLayer.source !== sourceId || styleLayer.type === 'background') return;
                     if (styleLayer.type === 'symbol' && !iconInTile(styleLayer)) return;
                     if (!self._layerVisible(styleLayer, zoom)) return;
@@ -697,15 +713,34 @@
             },
 
             _paint: function (styleLayer, name, feature, zoom, fallback) {
-                var paint = styleLayer.paint || {};
-                var value = paint[name] !== undefined ? evaluateValue(paint[name], feature, zoom) : undefined;
-                return value === undefined || value === null ? fallback : value;
+                return this._value(styleLayer, 'paint', name, feature, zoom, fallback);
             },
 
             _layout: function (styleLayer, name, feature, zoom, fallback) {
-                var layout = styleLayer.layout || {};
-                var value = layout[name] !== undefined ? evaluateValue(layout[name], feature, zoom) : undefined;
-                return value === undefined || value === null ? fallback : value;
+                return this._value(styleLayer, 'layout', name, feature, zoom, fallback);
+            },
+
+            // a paint/layout value; values that don't depend on the feature (constants, zoom ramps) are evaluated once
+            // per style layer and zoom (cached on the style layer, not part of the GL style)
+            _value: function (styleLayer, kind, name, feature, zoom, fallback) {
+                var props = styleLayer[kind];
+                var raw = props ? props[name] : undefined;
+                if (raw === undefined) return fallback;
+                if (raw === null || typeof raw !== 'object') return raw;   // a constant
+
+                var meta = styleLayer._gvMeta;
+                if (!meta) {
+                    meta = {};
+                    Object.defineProperty(styleLayer, '_gvMeta', { value: meta, enumerable: false, configurable: true });
+                }
+                var key = kind + ':' + name, entry = meta[key];
+                if (!entry || entry.raw !== raw) entry = meta[key] = { raw: raw, constant: !isDataDriven(raw), zoom: null, value: null };
+                if (entry.constant && entry.zoom === zoom) return entry.value;
+
+                var value = evaluateValue(raw, feature, zoom);
+                if (value === undefined || value === null) value = fallback;
+                if (entry.constant) { entry.zoom = zoom; entry.value = value; }
+                return value;
             },
 
             _path: function (ctx, feature, tx, ty, close) {
@@ -975,13 +1010,13 @@
                         })
                         .then(function (buffer) {
                             var layers = buffer.byteLength ? shared.decodeTile(buffer) : {};
-                            tiles[m.key] = { layers: layers, filtered: {} };
+                            tiles[m.key] = { layers: layers, filtered: {}, sourceId: m.sourceId };
 
                             // the main thread places labels: it gets the features of each symbol layer, filtered here.
                             // Features shared by several symbol layers are sent once (structured clone keeps identity).
                             var symbolLayers = {}, filtered = {};
                             (renderer._style ? renderer._style.layers : []).forEach(function (styleLayer, layerIndex) {
-                                if (styleLayer.type !== 'symbol') return;
+                                if (styleLayer.type !== 'symbol' || styleLayer.source !== m.sourceId) return;
                                 var layer = layers[styleLayer['source-layer']];
                                 if (!layer) return;
                                 if (shared.filterUsesZoom(styleLayer.filter)) {
@@ -1007,7 +1042,7 @@
                         m.layers.forEach(function (layerIndex) {
                             delete tile.filtered[layerIndex];
                             var styleLayer = renderer._style.layers[layerIndex];
-                            if (!styleLayer || styleLayer.type !== 'symbol') return;
+                            if (!styleLayer || styleLayer.type !== 'symbol' || styleLayer.source !== tile.sourceId) return;
                             var layer = tile.layers[styleLayer['source-layer']];
                             if (!layer) return;
                             any = true;
@@ -1037,7 +1072,7 @@
                     var view = m.view, sx = m.w / view[2], sy = m.h / view[3];
                     ctx.setTransform(sx, 0, 0, sy, -view[0] * sx, -view[1] * sy);
                     var d = { entry: tile, x0: m.d.x0, y0: m.d.y0, sx: m.d.sx, sy: m.d.sy, clip: m.d.clip };
-                    renderer.renderTile(ctx, m.sourceId, d, m.zoom);
+                    renderer.renderTile(ctx, m.sourceId, d, m.zoom, m.from, m.to);
                     var bitmap = canvas.transferToImageBitmap();
                     self.postMessage({ type: 'rendered', key: m.key, zoomKey: m.zoomKey, tileKey: m.tileKey, layerRect: m.layerRect, mapZoom: m.mapZoom, bitmap: bitmap }, [bitmap]);
                     break;
@@ -1094,9 +1129,14 @@
     // (doesn't fit, or the line bends more than maxAngle between neighbor glyphs). Kept upright: the path is
     // walked backwards when the text would run right to left.
     function placeAlongPath(measure, text, path, center, maxAngle, letterSpacing) {
-        var cumulative = [0];
-        for (var i = 1; i < path.length; i++) {
-            cumulative.push(cumulative[i - 1] + Math.hypot(path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1]));
+        // lengths along the path: computed once per path (several anchors of a line share it)
+        var cumulative = path.gvCumulative;
+        if (!cumulative) {
+            cumulative = [0];
+            for (var i = 1; i < path.length; i++) {
+                cumulative.push(cumulative[i - 1] + Math.hypot(path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1]));
+            }
+            Object.defineProperty(path, 'gvCumulative', { value: cumulative, enumerable: false });
         }
         var length = cumulative[cumulative.length - 1];
 
@@ -1107,7 +1147,14 @@
 
         function pointAt(distance, reversed) {
             var d = reversed ? length - distance : distance;
-            for (var j = 1; j < path.length; j++) {
+            if (d < 0 || d > length) return null;
+            // the segment of d: binary search in the cumulative lengths
+            var lo = 1, hi = path.length - 1;
+            while (lo < hi) {
+                var mid = (lo + hi) >> 1;
+                if (cumulative[mid] >= d) hi = mid; else lo = mid + 1;
+            }
+            for (var j = lo; j < path.length; j++) {
                 if (cumulative[j] >= d) {
                     var segment = cumulative[j] - cumulative[j - 1] || 1, t = (d - cumulative[j - 1]) / segment;
                     var a = path[j - 1], b = path[j];
@@ -1265,6 +1312,7 @@
             this._shown = {};        // label position keys shown at the last redraw: they keep their place
             this._shownZoom = null;
             this._sprites = {};      // label images: text with halo, glyphs → { canvas, w, h, pad }
+            this._curvedCache = {};  // label key → image of a label along a line
             this._spriteCount = 0;
         },
 
@@ -1426,6 +1474,7 @@
             this._findLayers(match).forEach(function (l) {
                 change(l);
                 delete l._gvDataDriven;   // cached in the shared code
+                delete l._gvMeta;
                 indices.push(layers.indexOf(l));
             });
             if (indices.length) this._restyle(indices, filterChanged);
@@ -1437,6 +1486,7 @@
         _restyle: function (indices, filterChanged) {
             var self = this;
             this._markIconsInTiles(this._style);
+            this._runs = this._buildRuns(this._style);
             this._renderer.setStyle(this._style);
             if (this._worker) {
                 this._worker.postMessage({ type: 'style', style: this._style });
@@ -1449,6 +1499,7 @@
                 });
             }
             this._styleVersion++;   // images and running render jobs of the old style are outdated
+            this._curvedCache = {};   // label images with the old colors
             if (this._map) this._redraw();
         },
 
@@ -1473,6 +1524,7 @@
             this._placed = [];
             this._shown = {};
             this._shownIds = {};
+            this._curvedCache = {};
             this._tileShownAt = {};
             this._visibleKeys = {};
             this._sourceAttributions = {};
@@ -1584,6 +1636,7 @@
                     }
                     self._style = style;
                     self._markIconsInTiles(style);
+                    self._runs = self._buildRuns(style);
                     self._renderer.setStyle(style);
                     var gviewGrid = (style.metadata || {})['gview:grid'] || null;
 
@@ -1737,7 +1790,7 @@
         // ---------------------------------------------------------------- worker
 
         _startWorker: function () {
-            if (!this.options.worker || Object.keys(this._sources).length !== 1) return null;   // several sources: main thread
+            if (!this.options.worker || !Object.keys(this._sources).length) return null;
             var worker = createWorker();
             if (!worker) return null;
 
@@ -1843,6 +1896,19 @@
         },
 
         // icon layers that may overlap anything (icons only, icon-allow-overlap): drawn into the tile images
+        // runs: consecutive style layers of one source drawn into the tile images (geometry, icons in tiles), in
+        // style order. With one source there is one run; styles with several sources get one image per run and tile.
+        _buildRuns: function (style) {
+            var runs = [], current = null;
+            style.layers.forEach(function (l, i) {
+                if (!l.source || l.type === 'background' || (l.type === 'symbol' && !iconInTile(l))) return;
+                if (current && current.source === l.source) { current.to = i; return; }
+                current = { source: l.source, from: i, to: i, index: runs.length };
+                runs.push(current);
+            });
+            return runs;
+        },
+
         _markIconsInTiles: function (style) {
             // 3D buildings (fill-extrusion) seen from above: flat fills with their color and opacity
             style.layers.forEach(function (l) {
@@ -2192,7 +2258,7 @@
                 this._tileOrder.push(job.key);
                 this._active++;
                 this._worker.postMessage({
-                    type: 'load', key: job.key, url: url,
+                    type: 'load', key: job.key, url: url, sourceId: job.sourceId,
                     fetchOptions: this.options.fetchOptions
                 });
                 return;
@@ -2321,12 +2387,10 @@
             var firstSource = perSource[Object.keys(perSource)[0]];
             var defaultZoom = firstSource ? firstSource.zoom : 0;
 
-            var sourceIds = Object.keys(perSource);
-            var cacheTiles = sourceIds.length === 1;   // one source: tiles are rendered to images and reused
             var usedImages = {};
 
-            // background layers (and, with several sources, everything) directly on the canvas
-            this._style.layers.forEach(function (styleLayer, layerIndex) {
+            // background layers directly on the canvas
+            this._style.layers.forEach(function (styleLayer) {
                 var current = perSource[styleLayer.source];
                 var zoom = current ? current.zoom : defaultZoom;
                 if (!self._layerVisible(styleLayer, zoom)) return;
@@ -2336,27 +2400,17 @@
                     ctx.fillStyle = self._paint(styleLayer, 'background-color', null, zoom, 'transparent');
                     ctx.fillRect(0, 0, size.x, size.y);
                     ctx.globalAlpha = 1;
-                    return;
                 }
-                if (!current || cacheTiles || (styleLayer.type === 'symbol' && !iconInTile(styleLayer))) return;
-
-                current.drawables.forEach(function (d) {
-                    ctx.save();
-                    ctx.beginPath();
-                    ctx.rect(d.clip[0], d.clip[1], d.clip[2], d.clip[3]);
-                    ctx.clip();
-                    self._drawLayerTile(ctx, styleLayer, layerIndex, d, zoom, null);
-                    ctx.restore();
-                });
             });
 
-            // one source: geometry layers per tile from the tile image cache
+            // geometry layers per run and tile from the tile image cache (rendered in the worker or in frame chunks)
             var now = Date.now(), fading = false;
-            if (cacheTiles) {
-                var id = sourceIds[0], current = perSource[id];
-                this._renderQueue = {};
+            this._renderQueue = {};
+            (this._runs || []).forEach(function (run) {
+                var id = run.source, current = perSource[id];
+                if (!current) return;   // a source that could not be loaded
                 current.drawables.forEach(function (d) {
-                    var image = self._tileImage(id, d, current.zoom, usedImages);
+                    var image = self._tileImage(id, d, current.zoom, usedImages, run);
                     if (image && image.layerRect) {
                         // overzoomed part rendered in the worker: placed by its map pixels at the zoom it was rendered
                         // for, scaled to the current zoom (the image of a slightly different zoom, until the new one)
@@ -2373,7 +2427,7 @@
                     if (image) {
                         // the current image, or the one of the previous zoom step (scaled) while the new one renders;
                         // a tile appearing for the first time fades in
-                        var alpha = self._tileAlpha(id + '|' + d.req.level + '/' + d.req.row + '/' + d.req.col, now);
+                        var alpha = self._tileAlpha(self._imageKey(id, d, run), now);
                         if (alpha < 1) { fading = true; ctx.globalAlpha = alpha; }
                         ctx.drawImage(image, d.clip[0], d.clip[1], d.clip[2], d.clip[3]);
                         ctx.globalAlpha = 1;
@@ -2387,6 +2441,7 @@
                     ctx.rect(d.clip[0], d.clip[1], d.clip[2], d.clip[3]);
                     ctx.clip();
                     self._style.layers.forEach(function (styleLayer, layerIndex) {
+                        if (layerIndex < run.from || layerIndex > run.to) return;
                         if (styleLayer.source !== id || styleLayer.type === 'background') return;
                         if (styleLayer.type === 'symbol' && !iconInTile(styleLayer)) return;
                         if (!self._layerVisible(styleLayer, current.zoom)) return;
@@ -2394,10 +2449,10 @@
                     });
                     ctx.restore();
                 });
-                // tile images not drawn now are dropped
-                Object.keys(this._images).forEach(function (key) { if (!usedImages[key] && !self._rendering[key]) self._dropImage(key); });
-                this._scheduleRender();
-            }
+            });
+            // tile images not drawn now are dropped
+            Object.keys(this._images).forEach(function (key) { if (!usedImages[key] && !self._rendering[key]) self._dropImage(key); });
+            this._scheduleRender();
             this._checkLoading();
 
             // labels: placed again on every redraw, except while panning (they move with the map, the labels of
@@ -2441,10 +2496,14 @@
             } : null);
         },
 
-        _tileImage: function (sourceId, d, zoom, usedImages) {
+        _imageKey: function (sourceId, d, run) {
+            return run.index + ':' + sourceId + '|' + d.req.level + '/' + d.req.row + '/' + d.req.col;
+        },
+
+        _tileImage: function (sourceId, d, zoom, usedImages, run) {
             // half zoom steps; the style version: images of an older style are rendered again
             var zoomKey = Math.round(zoom * 2) / 2 + '@' + this._styleVersion;
-            var key = sourceId + '|' + d.req.level + '/' + d.req.row + '/' + d.req.col;
+            var key = this._imageKey(sourceId, d, run);
             usedImages[key] = true;
 
             var ratio = this._ratio();
@@ -2464,14 +2523,14 @@
                     cached.layerRect[0] <= rect[0] + 0.5 && cached.layerRect[1] <= rect[1] + 0.5 &&
                     cached.layerRect[0] + cached.layerRect[2] >= rect[0] + rect[2] - 0.5 && cached.layerRect[1] + cached.layerRect[3] >= rect[1] + rect[3] - 0.5;
                 if (!covers) {
-                    this._renderQueue[key] = { sourceId: sourceId, d: d, zoom: zoom, zoomKey: zoomKey, view: [vx, vy, vw, vh], layerRect: rect, mapZoom: mapZoom };
+                    this._renderQueue[key] = { sourceId: sourceId, d: d, zoom: zoom, zoomKey: zoomKey, view: [vx, vy, vw, vh], layerRect: rect, mapZoom: mapZoom, from: run.from, to: run.to };
                 }
                 return cached && cached.layerRect ? cached : undefined;   // drawn at its layer rect
             }
 
             if (cached && !cached.layerRect && cached.zoomKey === zoomKey && cached.entry === d.entry) return cached.canvas;
 
-            this._renderQueue[key] = { sourceId: sourceId, d: d, zoom: zoom, zoomKey: zoomKey };
+            this._renderQueue[key] = { sourceId: sourceId, d: d, zoom: zoom, zoomKey: zoomKey, from: run.from, to: run.to };
             return cached && !cached.layerRect ? cached.canvas : undefined;
         },
 
@@ -2497,6 +2556,7 @@
                 self._worker.postMessage({
                     type: 'render', key: key, tileKey: self._key(job.sourceId, job.d.tile), sourceId: job.sourceId,
                     zoom: job.zoom, zoomKey: job.zoomKey, w: w, h: h, view: view, layerRect: job.layerRect || null, mapZoom: job.mapZoom,
+                    from: job.from, to: job.to,
                     d: { x0: job.d.x0, y0: job.d.y0, sx: job.d.sx, sy: job.d.sy, clip: job.d.clip }
                 });
             });
@@ -2516,7 +2576,7 @@
             var sx = w / d.clip[2], sy = h / d.clip[3];
             c.setTransform(sx, 0, 0, sy, -d.clip[0] * sx, -d.clip[1] * sy);
 
-            this._renderer.renderTile(c, job.sourceId, d, job.zoom);
+            this._renderer.renderTile(c, job.sourceId, d, job.zoom, job.from, job.to);
 
             this._images[key] = { canvas: canvas, zoomKey: job.zoomKey, entry: d.entry };
         },
@@ -2583,9 +2643,28 @@
         // ---------------------------------------------------------------- symbols (icons, labels)
 
         _collectSymbol: function (labels, styleLayer, feature, zoom, tx, ty, drawable, layerIndex) {
-            var placement = this._layout(styleLayer, 'symbol-placement', feature, zoom, 'point');
-            var iconName = resolveTokens(this._layout(styleLayer, 'icon-image', feature, zoom, null), feature);
-            var text = resolveTokens(this._layout(styleLayer, 'text-field', feature, zoom, null), feature);
+            // overzoomed tiles hold many more symbols than the canvas shows: first where, then whether, then what
+            var clip = drawable.clip, self = this, area = this._labelArea;
+            if (feature.type === 'Point') {
+                // points: any anchor on the canvas and in this tile? (cheap, before evaluating the style)
+                var inside = feature.geometry.some(function (path) {
+                    return path.some(function (p) {
+                        var x = tx(p), y = ty(p);
+                        return x >= clip[0] && y >= clip[1] && x < clip[0] + clip[2] && y < clip[1] + clip[3] &&
+                            (!area || (x >= 0 && y >= 0 && x <= area.x && y <= area.y));
+                    });
+                });
+                if (!inside) return;
+            }
+
+            // invisible at this zoom (text size or opacity 0, icon opacity 0): not placed at all
+            var size = this._layout(styleLayer, 'text-size', feature, zoom, 16);
+            var textVisible = size > 0 && this._paint(styleLayer, 'text-opacity', feature, zoom, 1) > 0;
+            var iconVisible = this._paint(styleLayer, 'icon-opacity', feature, zoom, 1) > 0 && this._layout(styleLayer, 'icon-size', feature, zoom, 1) > 0;
+            if (!textVisible && !iconVisible) return;
+
+            var iconName = iconVisible ? resolveTokens(this._layout(styleLayer, 'icon-image', feature, zoom, null), feature) : null;
+            var text = textVisible ? resolveTokens(this._layout(styleLayer, 'text-field', feature, zoom, null), feature) : null;
             if (text !== null && text !== undefined) {
                 text = String(text);
                 var transform = this._layout(styleLayer, 'text-transform', feature, zoom, 'none');
@@ -2594,12 +2673,10 @@
             }
             if (!iconName && !text) return;
 
+            var placement = this._layout(styleLayer, 'symbol-placement', feature, zoom, 'point');
             var keepViewport = placement === 'line-center' || this._layout(styleLayer, 'text-rotation-alignment', feature, zoom, 'map') === 'viewport';
             var spacing = placement === 'line' ? this._layout(styleLayer, 'symbol-spacing', feature, zoom, 250) : 0;
             var anchorPoints = symbolAnchors(feature, placement, spacing, keepViewport, tx, ty);
-
-            var clip = drawable.clip, self = this, area = this._labelArea;
-            var size = this._layout(styleLayer, 'text-size', feature, zoom, 16);
             var iconEntry = iconName ? this._spriteEntry(iconName) : null;
             var iconColor = this._paint(styleLayer, 'icon-color', feature, zoom, null);
 
@@ -2756,8 +2833,11 @@
                     setLetterSpacing(0);
 
                     if (l.curvedPath) {
-                        // along the line, glyph by glyph
-                        var glyphs = placeAlongPath(measure, l.text, l.curvedPath, l.curvedDistance, l.maxAngle, l.letterSpacing * l.size);
+                        // along the line, glyph by glyph. The text is centered on its anchor: if already the box of
+                        // one glyph at the anchor collides, the whole text does (most anchors of dense line labels)
+                        var half0 = l.size / 2;
+                        var hidden = declutter && !l.textOverlap && !l.icon && collides([l.x - half0, l.y - half0, l.x + half0, l.y + half0]);
+                        var glyphs = hidden ? null : placeAlongPath(measure, l.text, l.curvedPath, l.curvedDistance, l.maxAngle, l.letterSpacing * l.size);
                         if (glyphs) {
                             var half = l.size / 2 + l.padding;
                             text = {
@@ -2813,6 +2893,10 @@
             this._placedZoom = this._zoom;
             this._lastPlacement = Date.now();
             this._shown = shown;
+            // images of labels along lines: kept for the labels still shown at the same place (zoom: new keys)
+            var curved = this._curvedCache || {}, keep = {};
+            Object.keys(shown).forEach(function (key) { if (curved[key]) keep[key] = curved[key]; });
+            this._curvedCache = keep;
         },
 
         // symbols (icons, labels) of all drawn tiles, placed with collision handling; only those anchored on the
@@ -2912,6 +2996,34 @@
             });
         },
 
+        // a label along a line as one image, relative to its anchor: first all halos, then all glyphs (halos must
+        // not cover neighbor glyphs)
+        _curvedSprite: function (l, glyphs) {
+            var ratio = this._ratio(), self = this;
+            var reach = l.size * 1.2 + (l.haloWidth || 0) + 2;   // a glyph around its center, rotated
+            var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            glyphs.forEach(function (g) {
+                minX = Math.min(minX, g.x - l.x - reach); maxX = Math.max(maxX, g.x - l.x + reach);
+                minY = Math.min(minY, g.y - l.y - reach); maxY = Math.max(maxY, g.y - l.y + reach);
+            });
+            var w = Math.max(1, Math.ceil((maxX - minX) * ratio)), h = Math.max(1, Math.ceil((maxY - minY) * ratio));
+            var canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            var c = canvas.getContext('2d');
+            for (var pass = 0; pass < 2; pass++) {
+                var halo = pass === 0;
+                if (halo && !(l.haloColor && l.haloWidth > 0)) continue;
+                glyphs.forEach(function (g) {
+                    var gs = self._glyphSprite(l, g.ch, halo);
+                    var cos = Math.cos(g.angle) * ratio, sin = Math.sin(g.angle) * ratio;
+                    c.setTransform(cos, sin, -sin, cos, (g.x - l.x - minX) * ratio, (g.y - l.y - minY) * ratio);
+                    c.drawImage(gs.canvas, -gs.w / 2, -gs.h / 2, gs.w, gs.h);
+                });
+            }
+            return { canvas: canvas, x: minX, y: minY, w: w / ratio, h: h / ratio };
+        },
+
         _glyphSprite: function (l, ch, halo) {
             var pad = (halo ? l.haloWidth : 0) + Math.ceil(l.size * 0.25);
             var key = (halo ? 'h|' + l.haloColor + '|' + l.haloWidth : 'g|' + l.color) + '|' + l.font + '|' + ch;
@@ -2977,17 +3089,10 @@
 
                 ctx.globalAlpha = l.opacity * alpha;
                 if (p.text.glyphs) {
-                    // first all halos, then all glyphs: halos must not cover neighbor glyphs
-                    var dx = x - l.x, dy = y - l.y, glyphs = p.text.glyphs;
-                    for (var pass = 0; pass < 2; pass++) {
-                        var halo = pass === 0;
-                        if (halo && !(l.haloColor && l.haloWidth > 0)) continue;
-                        for (var j = 0; j < glyphs.length; j++) {
-                            var g = glyphs[j], gs = self._glyphSprite(l, g.ch, halo);
-                            place(g.x + dx, g.y + dy, g.angle);
-                            ctx.drawImage(gs.canvas, -gs.w / 2, -gs.h / 2, gs.w, gs.h);
-                        }
-                    }
+                    // text along a line: drawn once into its own image (glyph by glyph), then one image per frame
+                    var cs = p.curvedSprite || (p.curvedSprite = self._curvedCache[l.key] || (self._curvedCache[l.key] = self._curvedSprite(l, p.text.glyphs)));
+                    place(x, y, 0);
+                    ctx.drawImage(cs.canvas, cs.x, cs.y, cs.w, cs.h);
                 } else {
                     var s = self._textSprite(l, p.text);
                     place(x, y, p.text.angle);
