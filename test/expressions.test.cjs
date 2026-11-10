@@ -223,3 +223,29 @@ test('a scheme function sent to the worker as source works there too', () => {
     const restored = (new Function('return (' + fn.toString() + ');'))();
     assert.equal(shared.schemeColor('#102030', restored), 'rgba(48,32,16,1)');
 });
+
+test('color schemes: contrast, colorblind, sepia, tint', () => {
+    const { schemeColor, colorSchemeFunction, parseColor } = shared;
+    const f = name => colorSchemeFunction(name);
+    // contrast: white stays, pastel areas clearly darker; text black or white
+    assert.equal(schemeColor('#ffffff', f('contrast'), { property: 'fill-color' }), 'rgba(255,255,255,1)');
+    const pastel = parseColor(schemeColor('#e8c8c8', f('contrast'), { property: 'fill-color' }));
+    assert.ok(pastel[1] < 160, 'pastel areas darker (more contrast to white roads)');
+    assert.equal(schemeColor('#555555', f('contrast'), { property: 'text-color' }), 'rgba(0,0,0,1)');
+    assert.equal(schemeColor('rgba(255,255,255,0.6)', f('contrast'), { property: 'text-halo-color' }), 'rgba(255,255,255,0.9)');
+    // colorblind: red and green farther apart in blue (what deuteranopes still see), gray untouched
+    const red = parseColor(schemeColor('#ff0000', f('colorblind'))), green = parseColor(schemeColor('#00a000', f('colorblind')));
+    assert.ok(red[2] - green[2] > 100, 'red gets blue, green does not');
+    assert.equal(schemeColor('#808080', f('colorblind')), 'rgba(128,128,128,1)');
+    // sepia: warm, muted tones; white becomes a paper tone, not bright yellow
+    const s = parseColor(schemeColor('#3366cc', f('sepia')));
+    assert.ok(s[0] > s[2], 'warm');
+    assert.equal(schemeColor('#ffffff', f('sepia')), 'rgba(245,237,221,1)');
+    const yellow = parseColor(schemeColor('#fff5c8', f('sepia')));
+    assert.ok(yellow[0] - yellow[2] < 40, 'light yellow stays muted');
+    // tint: white stays white, dark becomes the color
+    assert.equal(schemeColor('#ffffff', f('tint:#1f6feb')), 'rgba(255,255,255,1)');
+    const dark = parseColor(schemeColor('#000000', f('tint:#1f6feb')));
+    assert.ok(dark[2] > dark[0] && dark[2] > 150, 'black → dark blue');
+    assert.ok(colorSchemeFunction('tint:nonsense'), 'an unparsable tint color: a default tint');
+});

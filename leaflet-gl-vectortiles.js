@@ -288,13 +288,61 @@
                 var l = 100 - hsl[2];
                 l = 8 + l * 0.8;   // no pure black or white
                 return hslToRgb(hsl[0], hsl[1] * 0.5, l).concat([c[3]]);
+            },
+            // high contrast (accessibility): areas and lines darker against white, text and halos black or white
+            contrast: function (c, info) {
+                var hsl = rgbToHsl(c), prop = info && info.property;
+                if (prop === 'text-color' || prop === 'text-halo-color') {
+                    var v = hsl[2] < 50 ? 0 : 255;
+                    return [v, v, v, Math.min(1, c[3] * 1.5)];
+                }
+                // white stays white, everything else darker and more saturated: light maps (white roads on pastel
+                // areas) get clearly separated areas, lines and text
+                var l = Math.pow(hsl[2] / 100, 2.2);
+                return hslToRgb(hsl[0], Math.min(100, hsl[1] * 1.3), l * 100).concat([c[3]]);
+            },
+            // red-green color blindness (deuteranopia, the most common): the colors that can't be told apart are
+            // shifted into those that can (daltonization)
+            colorblind: function (c) {
+                var r = c[0], g = c[1], b = c[2];
+                // as seen with deuteranopia (LMS simulation)
+                var L = 17.8824 * r + 43.5161 * g + 4.11935 * b;
+                var M = 3.45565 * r + 27.1554 * g + 3.86714 * b;
+                var S = 0.0299566 * r + 0.184309 * g + 1.46709 * b;
+                M = 0.494207 * L + 1.24827 * S;
+                var sr = 0.0809444479 * L - 0.130504409 * M + 0.116721066 * S;
+                var sg = -0.0102485335 * L + 0.0540193266 * M - 0.113614708 * S;
+                var sb = -0.000365296938 * L - 0.00412161469 * M + 0.693511405 * S;
+                // the difference shifted to channels that can be seen
+                var er = r - sr, eg = g - sg, eb = b - sb;
+                return [r, g + 0.7 * er + eg, b + 0.7 * er + eb, c[3]];
+            },
+            // old map: the brightness on a scale from dark brown to a muted paper tone, a little of the original color
+            // kept (water and forests still recognizable)
+            sepia: function (c) {
+                var t = (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255;
+                var dark = [70, 52, 34], paper = [243, 234, 215];
+                return [0, 1, 2].map(function (i) {
+                    return (dark[i] + (paper[i] - dark[i]) * t) * 0.85 + c[i] * 0.15;
+                }).concat([c[3]]);
             }
         };
+
+        // 'tint:<color>': shades of one color (e.g. a house color), dark parts in the color, light parts toward white
+        function tintScheme(color) {
+            var tint = parseColor(color) || [0, 102, 204, 1];
+            return function (c) {
+                var l = (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255;
+                return [0, 1, 2].map(function (i) { return tint[i] * (1 - l) * 0.85 + 255 * l + tint[i] * 0.15 * l; })
+                    .concat([c[3]]);
+            };
+        }
 
         // a scheme: a name ('grayscale', 'pale', 'dark') or a function (rgba, info) → rgba
         function colorSchemeFunction(scheme) {
             if (!scheme) return null;
             if (typeof scheme === 'function') return scheme;
+            if (typeof scheme === 'string' && scheme.indexOf('tint:') === 0) return tintScheme(scheme.slice(5).trim());
             return COLOR_SCHEMES[scheme] || null;
         }
 
@@ -1335,7 +1383,8 @@
             // render tile images on the GPU (Chrome/Edge accelerate canvases; dense vector tiles are much faster in
             // software, on the worker thread); false: software rendering
             gpuTileRendering: false,
-            // colors of the style (and sprite images) through a scheme: 'grayscale', 'pale', 'dark' or a function
+            // colors of the style (and sprite images) through a scheme: 'pale', 'grayscale', 'dark', 'contrast',
+            // 'colorblind', 'sepia', 'tint:<color>' (e.g. 'tint:#1f6feb') or a function
             // (rgba, info) → rgba with rgba = [r, g, b, a] (0–255, alpha 0–1), info = { property, layer }.
             // A function must be self-contained (it is also run in the worker); null: the style's own colors
             colorScheme: null,

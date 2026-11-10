@@ -51,6 +51,7 @@
     #panel.collapsed header { padding: 8px; align-items: center; }
 
     .field { display: block; margin-top: 10px; }
+    [hidden] { display: none !important; }
     .field > span { display: block; margin-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
     select, textarea, input[type=text] {
       width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--field); color: var(--fg); font: inherit;
@@ -153,7 +154,15 @@
         <option value="pale">Pale (background for thematic data)</option>
         <option value="grayscale">Grayscale</option>
         <option value="dark">Dark</option>
+        <option value="contrast">High contrast (accessibility)</option>
+        <option value="colorblind">Red-green color blindness</option>
+        <option value="sepia">Sepia (old map)</option>
+        <option value="tint">Tint (house color)</option>
       </select>
+    </label>
+    <label class="field" id="tint-field" hidden>
+      <span>Tint color</span>
+      <input id="tint" type="color" value="#1f6feb" style="width:100%;height:32px;padding:2px;border-radius:8px">
     </label>
 
     <details id="options">
@@ -390,7 +399,7 @@
         declutter: $('declutter').checked,
         lowPower: $('lowpower').checked,
         gpuTileRendering: $('gpu').checked,
-        colorScheme: $('scheme').value || null,
+        colorScheme: currentScheme(),
         attribution: Object.entries(attributions).find(([host]) => url.includes(host))?.[1]
       });
       layer.on('error', e => status('Error: ' + e.error.message, true));
@@ -426,16 +435,23 @@
   }
 
   // color scheme: switched at runtime (no reload); the map container's background through the same scheme
-  function applySchemeBackground() {
-    $('map').style.background = L.glVectorTiles.schemeColor('#ffffff', $('scheme').value || null);
+  function currentScheme() {
+    const v = $('scheme').value;
+    return v === 'tint' ? 'tint:' + $('tint').value : (v || null);
   }
-  try { const v = localStorage.getItem('glvt-scheme'); if (v !== null) $('scheme').value = v; } catch { }
-  applySchemeBackground();
-  $('scheme').addEventListener('change', () => {
-    try { localStorage.setItem('glvt-scheme', $('scheme').value); } catch { }
-    applySchemeBackground();
-    (window.vtcLayers || []).forEach(layer => layer.setColorScheme($('scheme').value || null));
-  });
+  function applyScheme(toLayers) {
+    $('tint-field').hidden = $('scheme').value !== 'tint';
+    try { localStorage.setItem('glvt-scheme', $('scheme').value); localStorage.setItem('glvt-tint', $('tint').value); } catch { }
+    $('map').style.background = L.glVectorTiles.schemeColor('#ffffff', currentScheme());
+    if (toLayers) (window.vtcLayers || []).forEach(layer => layer.setColorScheme(currentScheme()));
+  }
+  try {
+    const v = localStorage.getItem('glvt-scheme'); if (v !== null) $('scheme').value = v;
+    const t = localStorage.getItem('glvt-tint'); if (t) $('tint').value = t;
+  } catch { }
+  applyScheme(false);
+  $('scheme').addEventListener('change', () => applyScheme(true));
+  $('tint').addEventListener('change', () => applyScheme(true));
 
   function run() { load().catch(e => status('Error: ' + e.message, true)); }
   $('load').addEventListener('click', run);
