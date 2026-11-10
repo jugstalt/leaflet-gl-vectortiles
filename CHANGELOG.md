@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
 - Tests (Node's test runner, `npm test`) and GitHub Actions CI; `npm publish` runs the tests first.
 - Many more expressions: `coalesce`, `let`/`var`, `typeof`, `to-boolean`, `to-color`, type assertions, `upcase`,
