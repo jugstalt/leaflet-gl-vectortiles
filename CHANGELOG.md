@@ -11,9 +11,14 @@
   `liveRedrawInterval` ms.
 - Smooth panning: while the map is dragged, labels move with it and are not placed again (new ones when the map
   rests for a moment or at the end); the canvas is only redrawn when new tiles arrive or the padding runs out.
+- Icon-only symbol layers with `icon-allow-overlap` are drawn into the tile images (option `iconsInTiles`,
+  default on): basemap.at has 107 such layers (e.g. footpath dots), the label canvas holds 45 instead of ~1250
+  entries in Vienna and a redraw takes ~12 ms instead of ~25 ms. SDF icons are tinted in the worker too.
+- New tiles and labels fade in (option `fadeDuration`, default 200 ms); labels seen before a zoom step don't.
+- Tiles around the view are preloaded after the visible ones (option `preload`, default 1 ring).
 - Option `maxPixelRatio`: render at most at this device pixel ratio (e.g. 1 on high-DPI screens).
 - Option `lowPower`: economical defaults for weak clients (`maxPixelRatio: 1`, `padding: 0`,
-  `liveRedrawInterval: 0`, fewer cached tiles and parallel requests/renders).
+  `liveRedrawInterval: 0`, no fading, no preloading, fewer cached tiles and parallel requests/renders).
 - Option `padding` (default 0.15): the canvas reaches beyond the map's edges, panning shows map there at once.
 - Faster redraws: labels are only collected where they can be seen (tiles reach far beyond the canvas); a redraw
   of basemap.at in Vienna takes about 10–20 ms instead of 45 ms.

@@ -109,6 +109,9 @@ otherwise zooming beyond it gives no scale in Leaflet.
 | `renderBudget` | `12` | milliseconds per frame for rendering tile images on the main thread (fallback) |
 | `maxCachedTiles` | `384` | tiles kept in memory |
 | `liveRedrawInterval` | `150` | milliseconds between redraws while the map is dragged or zoomed without animation (pinch, smooth wheel zoom): tiles are loaded and drawn during the gesture; `0`: only at its end |
+| `fadeDuration` | `200` | milliseconds to fade in new tiles and labels; `0`: no fading |
+| `preload` | `1` | rings of tiles loaded around the visible ones (after them); `0`: none |
+| `iconsInTiles` | `true` | icon-only symbol layers with `icon-allow-overlap` are drawn into the tile images (much less work per frame, e.g. the footpath dots of basemap.at); they don't hide other labels then, as with `icon-ignore-placement` |
 | `maxPixelRatio` | `null` | render at most at this device pixel ratio, e.g. `1` on high-DPI screens; `null`: the screen's |
 | `lowPower` | `false` | economical defaults for weak clients, see [Performance](#performance) |
 | `padding` | `0.15` | the canvas reaches this part of the map size beyond each edge, so panning shows map there at once |
@@ -153,6 +156,8 @@ L.glVectorTiles(url, { lowPower: true, padding: 0.1 })   // economical, but with
 | `maxCachedTiles` | `384` | `128` | less memory, tiles are loaded again more often |
 | `maxConcurrentRequests` | `8` | `4` | fewer parallel downloads |
 | `maxConcurrentRenders` | `4` | `2` | fewer tile images rendered at the same time in the worker |
+| `fadeDuration` | `200` | `0` | no fading: no extra frames while tiles and labels appear |
+| `preload` | `1` | `0` | only visible tiles are loaded |
 
 Keep `worker: true`: rendering in the web worker keeps the page responsive also on weak clients. The smooth wheel
 zoom (map option `smoothWheelZoom`) is off by default.

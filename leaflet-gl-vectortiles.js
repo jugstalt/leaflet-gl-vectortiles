@@ -396,6 +396,69 @@
 
         var FILL_BATCH = 16;
 
+        // anchor points of a symbol in canvas pixels: the points, the middle of a polygon/line ('point' placement),
+        // every `spacing` pixels along lines ('line') or the middle of the longest part ('line-center');
+        // along lines with the angle of the line (0 with keepViewport) and the path for curved labels
+        function symbolAnchors(feature, placement, spacing, keepViewport, tx, ty) {
+            var anchorPoints = [];
+            if (placement === 'point' || feature.type === 'Point') {
+                feature.geometry.forEach(function (path) {
+                    if (feature.type === 'Point') {
+                        path.forEach(function (p) { anchorPoints.push({ x: tx(p), y: ty(p), angle: 0 }); });
+                    } else if (path.length) {
+                        var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                        path.forEach(function (p) { minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]); minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]); });
+                        var c = [(minX + maxX) / 2, (minY + maxY) / 2];
+                        anchorPoints.push({ x: tx(c), y: ty(c), angle: 0 });
+                    }
+                });
+                return anchorPoints;
+            }
+
+            var paths = feature.geometry.map(function (path) {
+                var pts = path.map(function (p) { return [tx(p), ty(p)]; }), length = 0;
+                for (var i = 1; i < pts.length; i++) length += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+                return { pts: pts, length: length };
+            });
+
+            var along = function (path, distance) {
+                var run = 0, pts = path.pts;
+                for (var j = 1; j < pts.length; j++) {
+                    var segment = Math.hypot(pts[j][0] - pts[j - 1][0], pts[j][1] - pts[j - 1][1]);
+                    if (run + segment >= distance && segment > 0) {
+                        var t = (distance - run) / segment;
+                        var angle = keepViewport ? 0 : Math.atan2(pts[j][1] - pts[j - 1][1], pts[j][0] - pts[j - 1][0]);
+                        if (angle > Math.PI / 2) angle -= Math.PI;
+                        if (angle < -Math.PI / 2) angle += Math.PI;
+                        return { x: pts[j - 1][0] + t * (pts[j][0] - pts[j - 1][0]), y: pts[j - 1][1] + t * (pts[j][1] - pts[j - 1][1]), angle: angle, lineLength: path.length, path: pts, distance: distance };
+                    }
+                    run += segment;
+                }
+                return null;
+            };
+
+            if (spacing > 0) {
+                paths.forEach(function (path) {
+                    if (path.length < 1) return;
+                    var first = Math.min(spacing / 2, path.length / 2);
+                    for (var d = first; d < path.length; d += spacing) {
+                        var a = along(path, d);
+                        if (a) anchorPoints.push(a);
+                    }
+                });
+            } else {
+                var longest = paths.reduce(function (best, p) { return !best || p.length > best.length ? p : best; }, null);
+                if (longest && longest.length > 0) {
+                    var mid = along(longest, longest.length / 2);
+                    if (mid) anchorPoints.push(mid);
+                }
+            }
+            return anchorPoints;
+        }
+
+        // symbol layers drawn into the tile images instead of the label canvas (see option iconsInTiles)
+        function iconInTile(styleLayer) { return styleLayer.type === 'symbol' && !!styleLayer['gview:inTile']; }
+
         function makeCanvas(width, height) {
             if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(width, height);
             var canvas = document.createElement('canvas');
@@ -409,17 +472,19 @@
             this._style = null;
             this._sprite = null;     // { index, image, pixelRatio }
             this._patterns = {};
+            this._tintedIcons = {};
         }
 
         TileRenderer.prototype = {
             setStyle: function (style) { this._style = style; this._patterns = {}; },
-            setSprite: function (sprite) { this._sprite = sprite; this._patterns = {}; },
+            setSprite: function (sprite) { this._sprite = sprite; this._patterns = {}; this._tintedIcons = {}; },
 
             // all geometry layers of a source for one tile (d: { entry, x0, y0, sx, sy, clip })
             renderTile: function (ctx, sourceId, d, zoom) {
                 var self = this;
                 this._style.layers.forEach(function (styleLayer, layerIndex) {
-                    if (styleLayer.source !== sourceId || styleLayer.type === 'symbol' || styleLayer.type === 'background') return;
+                    if (styleLayer.source !== sourceId || styleLayer.type === 'background') return;
+                    if (styleLayer.type === 'symbol' && !iconInTile(styleLayer)) return;
                     if (!self._layerVisible(styleLayer, zoom)) return;
                     self._drawLayerTile(ctx, styleLayer, layerIndex, d, zoom, null);
                 });
@@ -452,6 +517,7 @@
 
                 if (styleLayer.type === 'symbol') {
                     if (labels) features.forEach(function (feature) { labels(feature, tx, ty); });
+                    else if (iconInTile(styleLayer)) this._drawIcons(ctx, styleLayer, features, zoom, tx, ty);
                 } else if (!layerIsDataDriven(styleLayer)) {
                     // the same style for every feature: few paths, few fill/stroke calls
                     this._drawFeatures(ctx, styleLayer, features, zoom, tx, ty);
@@ -624,7 +690,60 @@
                 }
             },
 
+            // icons that may overlap anything, drawn like geometry (into the tile image)
+            _drawIcons: function (ctx, styleLayer, features, zoom, tx, ty) {
+                var self = this;
+                features.forEach(function (feature) {
+                    var name = resolveTokens(self._layout(styleLayer, 'icon-image', feature, zoom, null), feature);
+                    var entry = self._spriteEntry(name);
+                    if (!entry) return;
+                    var placement = self._layout(styleLayer, 'symbol-placement', feature, zoom, 'point');
+                    var spacing = placement === 'line' ? self._layout(styleLayer, 'symbol-spacing', feature, zoom, 250) : 0;
+                    var keepViewport = self._layout(styleLayer, 'icon-rotation-alignment', feature, zoom, 'auto') === 'viewport';
+                    var size = self._layout(styleLayer, 'icon-size', feature, zoom, 1);
+                    var rotate = self._layout(styleLayer, 'icon-rotate', feature, zoom, 0) * Math.PI / 180;
+                    var ratio = entry.pixelRatio || self._sprite.pixelRatio || 1;
+                    var w = entry.width / ratio * size, h = entry.height / ratio * size;
+                    var icon = self._icon(entry, name, self._paint(styleLayer, 'icon-color', feature, zoom, null));
+                    ctx.globalAlpha = self._paint(styleLayer, 'icon-opacity', feature, zoom, 1);
+                    symbolAnchors(feature, placement, spacing, keepViewport, tx, ty).forEach(function (a) {
+                        var angle = a.angle + rotate;
+                        if (angle) {
+                            ctx.save();
+                            ctx.translate(a.x, a.y);
+                            ctx.rotate(angle);
+                            ctx.drawImage(icon.source, icon.x, icon.y, entry.width, entry.height, -w / 2, -h / 2, w, h);
+                            ctx.restore();
+                        } else {
+                            ctx.drawImage(icon.source, icon.x, icon.y, entry.width, entry.height, a.x - w / 2, a.y - h / 2, w, h);
+                        }
+                    });
+                    ctx.globalAlpha = 1;
+                });
+            },
+
             // ---------------------------------------------------------------- sprites
+
+            // the icon in the sprite sheet, or an SDF icon tinted with icon-color (cached): { source, x, y }
+            _icon: function (entry, name, color) {
+                if (!entry.sdf || !color) return { source: this._sprite.image, x: entry.x, y: entry.y };
+                var key = name + '|' + color, tinted = this._tintedIcons[key];
+                if (!tinted) {
+                    var canvas = makeCanvas(entry.width, entry.height), c = canvas.getContext('2d');
+                    c.drawImage(this._sprite.image, entry.x, entry.y, entry.width, entry.height, 0, 0, entry.width, entry.height);
+                    // SDF: alpha above ~0.75 is inside the shape
+                    var data = c.getImageData(0, 0, entry.width, entry.height);
+                    for (var i = 3; i < data.data.length; i += 4) {
+                        data.data[i] = Math.max(0, Math.min(255, Math.round((data.data[i] / 255 - 0.7) / 0.1 * 255)));
+                    }
+                    c.putImageData(data, 0, 0);
+                    c.globalCompositeOperation = 'source-in';
+                    c.fillStyle = color;
+                    c.fillRect(0, 0, entry.width, entry.height);
+                    tinted = this._tintedIcons[key] = { source: canvas, x: 0, y: 0 };
+                }
+                return tinted;
+            },
 
             _spriteEntry: function (name) {
                 return this._sprite && name && this._sprite.index[name] ? this._sprite.index[name] : null;
@@ -650,7 +769,8 @@
         return {
             decodeTile: decodeTile, evaluate: evaluate, evaluateValue: evaluateValue, resolveTokens: resolveTokens,
             filterMatches: filterMatches, filterUsesZoom: filterUsesZoom, layerIsDataDriven: layerIsDataDriven,
-            addPath: addPath, makeCanvas: makeCanvas, TileRenderer: TileRenderer
+            addPath: addPath, makeCanvas: makeCanvas, symbolAnchors: symbolAnchors, iconInTile: iconInTile,
+            TileRenderer: TileRenderer
         };
     }
 
@@ -757,6 +877,7 @@
 
     var gvs = gvShared();
     var decodeTile = gvs.decodeTile, evaluateValue = gvs.evaluateValue, resolveTokens = gvs.resolveTokens;
+    var symbolAnchors = gvs.symbolAnchors, iconInTile = gvs.iconInTile;
 
     // ------------------------------------------------------------------------------------------
     // Fonts, colors
@@ -854,7 +975,9 @@
         liveRedrawInterval: 0,
         maxCachedTiles: 128,
         maxConcurrentRequests: 4,
-        maxConcurrentRenders: 2
+        maxConcurrentRenders: 2,
+        fadeDuration: 0,
+        preload: 0
     };
 
     var GLVectorTiles = L.Layer.extend({
@@ -886,6 +1009,14 @@
             // render at most at this device pixel ratio (e.g. 1 on high-DPI screens: less sharp, a fraction of
             // the pixels to render); null = the screen's ratio
             maxPixelRatio: null,
+            // icon layers that may overlap anything (icons only, icon-allow-overlap) are drawn into the tile
+            // images: much less work per frame on dense maps; they don't hide labels then (as with
+            // icon-ignore-placement)
+            iconsInTiles: true,
+            // rings of tiles loaded around the visible ones (after them), so panning finds them loaded; 0 = none
+            preload: 1,
+            // milliseconds to fade in new tiles and labels; 0 = no fading
+            fadeDuration: 200,
             // economical defaults for weak clients (see LOW_POWER); options set explicitly take precedence
             lowPower: false,
             // fetch options, e.g. { credentials: 'include' } or { headers: { Authorization: ... } }
@@ -925,6 +1056,9 @@
             this._textWidths = {};   // measureText cache: font|text → width
             this._textWidthCount = 0;
             this._placed = [];       // the labels placed at the last redraw (see _placeSymbols)
+            this._visibleKeys = {};  // tile keys on the canvas (not preloaded ones)
+            this._tileShownAt = {};  // tile image key → time it was first drawn (fading in)
+            this._shownIds = {};     // label text|icon → last time shown (no fading in after a zoom step)
             this._shown = {};        // label position keys shown at the last redraw: they keep their place
             this._shownZoom = null;
             this._sprites = {};      // label images: text with halo, glyphs → { canvas, w, h, pad }
@@ -1033,6 +1167,7 @@
             return this._fetchJson(styleUrl)
                 .then(function (style) {
                     self._style = style;
+                    self._markIconsInTiles(style);
                     self._renderer.setStyle(style);
                     var gviewGrid = (style.metadata || {})['gview:grid'] || null;
 
@@ -1181,7 +1316,7 @@
                         entry.layers = m.layers;
                         entry.filtered = m.filtered;
                         entry.status = 'loaded';
-                        this._scheduleRedraw();
+                        if (this._visibleKeys[m.key]) this._scheduleRedraw();   // preloaded: drawn when visible
                     }
                     this._pump();
                     break;
@@ -1206,10 +1341,41 @@
             }
         },
 
+        // fading in: the opacity of a tile image (first drawn at _tileShownAt[key])
+        _tileAlpha: function (key, now) {
+            var duration = this.options.fadeDuration;
+            if (!(duration > 0)) return 1;
+            var since = this._tileShownAt[key];
+            if (since === undefined) since = this._tileShownAt[key] = now;
+            return Math.min(1, (now - since) / duration);
+        },
+
+        // the next frame of a tile fading in: tiles only, labels are not placed again
+        _requestFadeFrame: function () {
+            if (this._fadeFrame) return;
+            this._fadeFrame = L.Util.requestAnimFrame(function () {
+                this._fadeFrame = null;
+                if (!this._map || this._map._animatingZoom) return;
+                this._fadeRedraw = true;
+                try { this._redraw(); } finally { this._fadeRedraw = false; }
+            }, this);
+        },
+
         _dropImage: function (key) {
+            delete this._tileShownAt[key];
             var image = this._images[key];
             if (image && image.canvas.close) image.canvas.close();
             delete this._images[key];
+        },
+
+        // icon layers that may overlap anything (icons only, icon-allow-overlap): drawn into the tile images
+        _markIconsInTiles: function (style) {
+            var on = this.options.iconsInTiles;
+            style.layers.forEach(function (l) {
+                var layout = l.layout || {};
+                l['gview:inTile'] = !!(on && l.type === 'symbol' && layout['icon-image'] && !layout['text-field'] &&
+                    layout['icon-allow-overlap'] === true);
+            });
         },
 
         // device pixels per CSS pixel to render with
@@ -1406,9 +1572,11 @@
             return { minX: minX, minY: maxY - h, maxX: minX + w, maxY: maxY };
         },
 
-        _visibleTiles: function (grid, level) {
+        // the tiles of a level on the canvas, or with `ring` > 0 that many tiles more around it
+        _visibleTiles: function (grid, level, ring) {
             var size = this._canvasSize(), res = grid.resolutions[level];
-            var a = this._toWorld(0, 0), b = this._toWorld(size.x, size.y);
+            var m = ring ? ring * grid.tileSize[0] * res / this._mapResolution() : 0;   // tile size in pixels
+            var a = this._toWorld(-m, -m), b = this._toWorld(size.x + m, size.y + m);
             var minX = Math.min(a.x, b.x), maxX = Math.max(a.x, b.x), minY = Math.min(a.y, b.y), maxY = Math.max(a.y, b.y);
 
             if (grid.extent) {
@@ -1447,14 +1615,14 @@
         _requestTiles: function () {
             var resolution = this._mapResolution(), self = this;
             var size = this._canvasSize(), cx = size.x / 2, cy = size.y / 2;
-            var wanted = {}, pending = [];
+            var wanted = {}, pending = [], visible = {};
 
             Object.keys(this._sources).forEach(function (id) {
                 var source = self._sources[id];
                 var level = self._level(source, resolution);
                 self._visibleTiles(source.grid, level).forEach(function (t) {
                     var key = self._key(id, t);
-                    wanted[key] = true;
+                    wanted[key] = visible[key] = true;
                     if (self._tiles[key]) {
                         self._tiles[key].used = Date.now();
                         return;
@@ -1464,6 +1632,18 @@
                     var env = self._tileEnvelope(source.grid, t.level, t.row, t.col);
                     var p = self._toCanvas((env.minX + env.maxX) / 2, (env.minY + env.maxY) / 2);
                     pending.push({ key: key, sourceId: id, t: t, priority: Math.hypot(p.x - cx, p.y - cy) });
+                });
+
+                // preloading: the tiles around the canvas, after the visible ones
+                if (!(self.options.preload > 0)) return;
+                self._visibleTiles(source.grid, level, self.options.preload).forEach(function (t) {
+                    var key = self._key(id, t);
+                    if (wanted[key]) return;
+                    wanted[key] = true;
+                    if (self._tiles[key]) return;
+                    var env = self._tileEnvelope(source.grid, t.level, t.row, t.col);
+                    var p = self._toCanvas((env.minX + env.maxX) / 2, (env.minY + env.maxY) / 2);
+                    pending.push({ key: key, sourceId: id, t: t, priority: 1e7 + Math.hypot(p.x - cx, p.y - cy) });
                 });
             });
 
@@ -1479,6 +1659,7 @@
             });
 
             pending.sort(function (a, b) { return a.priority - b.priority; });
+            this._visibleKeys = visible;
             this._pending = pending;
             this._pump();
             this._pruneCache();
@@ -1640,7 +1821,7 @@
                     ctx.globalAlpha = 1;
                     return;
                 }
-                if (!current || cacheTiles || styleLayer.type === 'symbol') return;
+                if (!current || cacheTiles || (styleLayer.type === 'symbol' && !iconInTile(styleLayer))) return;
 
                 current.drawables.forEach(function (d) {
                     ctx.save();
@@ -1653,6 +1834,7 @@
             });
 
             // one source: geometry layers per tile from the tile image cache
+            var now = Date.now(), fading = false;
             if (cacheTiles) {
                 var id = sourceIds[0], current = perSource[id];
                 this._renderQueue = {};
@@ -1670,8 +1852,12 @@
                         return;
                     }
                     if (image) {
-                        // the current image, or the one of the previous zoom step (scaled) while the new one renders
+                        // the current image, or the one of the previous zoom step (scaled) while the new one renders;
+                        // a tile appearing for the first time fades in
+                        var alpha = self._tileAlpha(id + '|' + d.req.level + '/' + d.req.row + '/' + d.req.col, now);
+                        if (alpha < 1) { fading = true; ctx.globalAlpha = alpha; }
                         ctx.drawImage(image, d.clip[0], d.clip[1], d.clip[2], d.clip[3]);
+                        ctx.globalAlpha = 1;
                         return;
                     }
                     if (image === undefined) return;   // queued, nothing to show yet
@@ -1682,7 +1868,8 @@
                     ctx.rect(d.clip[0], d.clip[1], d.clip[2], d.clip[3]);
                     ctx.clip();
                     self._style.layers.forEach(function (styleLayer, layerIndex) {
-                        if (styleLayer.source !== id || styleLayer.type === 'symbol' || styleLayer.type === 'background') return;
+                        if (styleLayer.source !== id || styleLayer.type === 'background') return;
+                        if (styleLayer.type === 'symbol' && !iconInTile(styleLayer)) return;
                         if (!self._layerVisible(styleLayer, current.zoom)) return;
                         self._drawLayerTile(ctx, styleLayer, layerIndex, d, current.zoom, null);
                     });
@@ -1696,7 +1883,9 @@
             // labels: placed again on every redraw, except while panning (they move with the map, the labels of
             // newly visible parts are placed when the browser has time)
             this._perSource = perSource;
-            if (this._isPanning() && this._placedZoom === this._zoom) {
+            if (fading) this._requestFadeFrame();
+
+            if ((this._isPanning() || this._fadeRedraw) && this._placedZoom === this._zoom) {
                 this._paintLabels();
                 this._requestIdlePlacement();
             } else {
@@ -1883,63 +2072,9 @@
             }
             if (!iconName && !text) return;
 
-            var anchorPoints = [];
             var keepViewport = placement === 'line-center' || this._layout(styleLayer, 'text-rotation-alignment', feature, zoom, 'map') === 'viewport';
-
-            if (placement === 'point' || feature.type === 'Point') {
-                feature.geometry.forEach(function (path) {
-                    if (feature.type === 'Point') {
-                        path.forEach(function (p) { anchorPoints.push({ x: tx(p), y: ty(p), angle: 0 }); });
-                    } else if (path.length) {
-                        // polygon/line with point placement: the middle of the path's box
-                        var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-                        path.forEach(function (p) { minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]); minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]); });
-                        var c = [(minX + maxX) / 2, (minY + maxY) / 2];
-                        anchorPoints.push({ x: tx(c), y: ty(c), angle: 0 });
-                    }
-                });
-            } else {
-                // line placement: every symbol-spacing pixels ('line'), or the middle of the longest part ('line-center')
-                var spacing = placement === 'line' ? this._layout(styleLayer, 'symbol-spacing', feature, zoom, 250) : 0;
-                var paths = feature.geometry.map(function (path) {
-                    var pts = path.map(function (p) { return [tx(p), ty(p)]; }), length = 0;
-                    for (var i = 1; i < pts.length; i++) length += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
-                    return { pts: pts, length: length };
-                });
-
-                var along = function (path, distance) {
-                    var run = 0, pts = path.pts;
-                    for (var j = 1; j < pts.length; j++) {
-                        var segment = Math.hypot(pts[j][0] - pts[j - 1][0], pts[j][1] - pts[j - 1][1]);
-                        if (run + segment >= distance && segment > 0) {
-                            var t = (distance - run) / segment;
-                            var angle = keepViewport ? 0 : Math.atan2(pts[j][1] - pts[j - 1][1], pts[j][0] - pts[j - 1][0]);
-                            if (angle > Math.PI / 2) angle -= Math.PI;
-                            if (angle < -Math.PI / 2) angle += Math.PI;
-                            return { x: pts[j - 1][0] + t * (pts[j][0] - pts[j - 1][0]), y: pts[j - 1][1] + t * (pts[j][1] - pts[j - 1][1]), angle: angle, lineLength: path.length, path: pts, distance: distance };
-                        }
-                        run += segment;
-                    }
-                    return null;
-                };
-
-                if (spacing > 0) {
-                    paths.forEach(function (path) {
-                        if (path.length < 1) return;
-                        var first = Math.min(spacing / 2, path.length / 2);
-                        for (var d = first; d < path.length; d += spacing) {
-                            var a = along(path, d);
-                            if (a) anchorPoints.push(a);
-                        }
-                    });
-                } else {
-                    var longest = paths.reduce(function (best, p) { return !best || p.length > best.length ? p : best; }, null);
-                    if (longest && longest.length > 0) {
-                        var mid = along(longest, longest.length / 2);
-                        if (mid) anchorPoints.push(mid);
-                    }
-                }
-            }
+            var spacing = placement === 'line' ? this._layout(styleLayer, 'symbol-spacing', feature, zoom, 250) : 0;
+            var anchorPoints = symbolAnchors(feature, placement, spacing, keepViewport, tx, ty);
 
             var clip = drawable.clip, self = this, area = this._labelArea;
             var size = this._layout(styleLayer, 'text-size', feature, zoom, 16);
@@ -1953,6 +2088,8 @@
 
                 labels.push({
                     id: styleLayer.id + '|' + (iconName || '') + '|' + (text || ''),
+                    // the same label in another style layer (styles often have one layer per zoom range)
+                    fadeId: (iconName || '') + '|' + (text || ''),
                     x: a.x, y: a.y, angle: a.angle,
                     icon: iconEntry ? self._iconImage(iconEntry, iconName, iconColor) : null,
                     iconRatio: iconEntry ? (iconEntry.pixelRatio || self._sprite.pixelRatio) : 1,
@@ -2040,7 +2177,11 @@
             // position keys in layer pixels: the same feature has the same key while the map is only panned
             var origin = this._canvasOrigin || this._layerOrigin(), zoom = this._zoom;
             if (zoom !== this._shownZoom) { this._shown = {}; this._shownZoom = zoom; }
-            var previous = this._shown, shown = {};
+            var previous = this._shown, shown = {}, now = Date.now();
+            // labels seen in the last seconds (by text and icon): no fading in after a zoom step, also when an
+            // intermediate placement (tiles still loading) showed only a few of them
+            var seenIds = this._shownIds;
+            this._placed.forEach(function (p) { seenIds[p.l.fadeId] = now; });   // visible until now
             labels.forEach(function (l) {
                 l.key = l.id + '@' + Math.round(l.x + origin.x) + ',' + Math.round(l.y + origin.y);
             });
@@ -2121,8 +2262,10 @@
                 }
                 if (showIcon && !l.iconIgnorePlacement) push(icon.box);
                 if (showText && !l.textIgnorePlacement) push(text.box);
-                shown[l.key] = true;
-                placed.push({ l: l, icon: showIcon ? icon : null, text: showText ? text : null });
+                // shown since: new labels fade in (not those shown before the last zoom step)
+                var since = shown[l.key] = previous[l.key] || (seenIds[l.fadeId] !== undefined ? 1 : now);
+                seenIds[l.fadeId] = now;
+                placed.push({ l: l, icon: showIcon ? icon : null, text: showText ? text : null, since: since });
             });
 
             // painted in style order (the placement order only decides who wins a collision)
@@ -2131,6 +2274,7 @@
             placed.sort(function (a, b) { return rank.get(a.l) - rank.get(b.l); });
 
             this._placed = placed;
+            Object.keys(seenIds).forEach(function (id) { if (now - seenIds[id] > 10000) delete seenIds[id]; });
             this._placedOrigin = this._canvasOrigin;
             this._placedZoom = this._zoom;
             this._lastPlacement = Date.now();
@@ -2144,7 +2288,7 @@
             if (!perSource) return;
             this._labelArea = this._canvasSize();
             this._style.layers.forEach(function (styleLayer, layerIndex) {
-                if (styleLayer.type !== 'symbol') return;
+                if (styleLayer.type !== 'symbol' || iconInTile(styleLayer)) return;
                 var current = perSource[styleLayer.source];
                 if (!current || !self._layerVisible(styleLayer, current.zoom)) return;
                 current.drawables.forEach(function (d) {
@@ -2279,19 +2423,25 @@
                 ctx.setTransform(cos, sin, -sin, cos, ratio * x, ratio * y);
             }
 
-            var placed = this._placed;
+            var placed = this._placed, now = Date.now(), fade = this.options.fadeDuration > 0 ? this.options.fadeDuration : 0, fading = false;
             for (var i = 0; i < placed.length; i++) {
                 var p = placed[i], l = p.l;
                 var x = m.e + m.a * (l.x + shiftX) - own.x, y = m.f + m.a * (l.y + shiftY) - own.y;
                 if (x < -256 || y < -256 || x > maxX || y > maxY) continue;
 
+                // new labels fade in
+                var alpha = fade ? Math.min(1, (now - p.since) / fade) : 1;
+                if (alpha < 1) fading = true;
+
                 if (p.icon) {
+                    ctx.globalAlpha = alpha;
                     place(x, y, l.angle + l.iconRotate);
                     ctx.drawImage(self._iconCanvas(l.icon), -p.icon.w / 2, -p.icon.h / 2, p.icon.w, p.icon.h);
+                    ctx.globalAlpha = 1;
                 }
                 if (!p.text) continue;
 
-                ctx.globalAlpha = l.opacity;
+                ctx.globalAlpha = l.opacity * alpha;
                 if (p.text.glyphs) {
                     // first all halos, then all glyphs: halos must not cover neighbor glyphs
                     var dx = x - l.x, dy = y - l.y, glyphs = p.text.glyphs;
@@ -2312,6 +2462,14 @@
                 ctx.globalAlpha = 1;
             }
             ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+
+            // labels fading in: the next frame (only painting, cheap)
+            if (fading && !this._labelFadeFrame) {
+                this._labelFadeFrame = L.Util.requestAnimFrame(function () {
+                    this._labelFadeFrame = null;
+                    if (this._labelCtx) this._paintLabels();
+                }, this);
+            }
         }
     });
 
