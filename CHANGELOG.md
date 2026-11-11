@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Label language: option `language` and `setLanguage()`: name fields of `text-field` (`name`, `name_en`,
+  `name:latin`, `{name}` tokens, …) prefer `name:<lang>` / `name_<lang>`, falling back to the original.
+- Style properties: `icon-text-fit` (+ padding), `text-variable-anchor` (+ `text-radial-offset`), `text-justify`,
+  `text-line-height`, `fill-/line-/circle-/text-/icon-translate`, `line-offset`, `line-pattern` (not rotated
+  along the line).
+- Fix: a symbol whose text can't be laid out (longer than its line) no longer shows its icon alone unless the text
+  is optional (as GL; empty road shields in OpenFreeMap Positron).
+
 - Images for printing: `L.glVectorTiles.mapToImage(map, options)` (all GL layers) and `layer.toImage(options)`:
   extent + dpi → image size, extent + image size → dpi, extent + image size + dpi → scale; `scale` (default the
   map's); the extent widened to the image's aspect ratio (never distorted); labels placed for the image size, color

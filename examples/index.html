@@ -167,6 +167,18 @@
         <option value="tint">Tint (house color)</option>
       </select>
     </label>
+    <label class="field">
+      <span>Label language <small>(styles with name:&lt;lang&gt; fields, e.g. OpenFreeMap, VersaTiles)</small></span>
+      <select id="language">
+        <option value="">As in the style</option>
+        <option value="de">Deutsch</option>
+        <option value="en">English</option>
+        <option value="fr">Français</option>
+        <option value="it">Italiano</option>
+        <option value="hu">Magyar</option>
+        <option value="ja">日本語</option>
+      </select>
+    </label>
     <label class="field" id="tint-field" hidden>
       <span>Tint color</span>
       <input id="tint" type="color" value="#1f6feb" style="width:100%;height:32px;padding:2px;border-radius:8px">
@@ -437,6 +449,7 @@
         lowPower: $('lowpower').checked,
         gpuTileRendering: $('gpu').checked,
         colorScheme: currentScheme(),
+        language: $('language').value || null,
         attribution: Object.entries(attributions).find(([host]) => url.includes(host))?.[1]
       });
       layer.on('error', e => status('Error: ' + e.error.message, true));
@@ -487,6 +500,11 @@
     const t = localStorage.getItem('glvt-tint'); if (t) $('tint').value = t;
   } catch { }
   applyScheme(false);
+  try { const v = localStorage.getItem('glvt-language'); if (v !== null) $('language').value = v; } catch { }
+  $('language').addEventListener('change', () => {
+    try { localStorage.setItem('glvt-language', $('language').value); } catch { }
+    (window.vtcLayers || []).forEach(layer => layer.setLanguage($('language').value || null));
+  });
   $('scheme').addEventListener('change', () => applyScheme(true));
   $('tint').addEventListener('change', () => applyScheme(true));
 

@@ -17,9 +17,10 @@ levels. Protobuf and MVT are decoded in the plugin; rendering runs in a web work
 
 - **Sources:** `tiles` URLs, TileJSON (`url`), ESRI VectorTileServer sources, several sources per style, relative
   URLs. 404/204 tiles count as empty. gView vector tile caches in any grid (`gview:grid` in the style).
-- **Styles:** fill (color, opacity, outline, pattern), line (width, color, opacity, dashes, join, cap), circle,
-  symbol (icons from the sprite, SDF icons tinted with `icon-color`, text with font, size, halo, anchor, offset,
-  rotation, letter spacing, transform, `text-max-width` wrapping), background. `fill-extrusion` (3D buildings) is
+- **Styles:** fill (color, opacity, outline, pattern), line (width, color, opacity, dashes, join, cap, offset,
+  pattern), circle, symbol (icons from the sprite, SDF icons tinted with `icon-color`, `icon-text-fit`, text with font,
+  size, halo, anchor, variable anchors, offset, rotation, letter spacing, line height, justify, transform,
+  `text-max-width` wrapping), background, `*-translate`. `fill-extrusion` (3D buildings) is
   drawn flat, as seen from above. Sprites as a URL or as a list (`[{ id, url }]`, icons `id:name`).
   - Expressions: data (`get`, `has`, `properties`, `id`, `geometry-type`, `zoom`), decisions (`match`, `case`,
     `coalesce`, comparisons, `all`, `any`, `!`, `in`), ramps (`step`, `interpolate` linear/exponential/cubic-bezier,
@@ -133,6 +134,7 @@ otherwise zooming beyond it gives no scale in Leaflet.
 | `renderBudget` | `12` | milliseconds per frame for rendering tile images on the main thread (fallback) |
 | `maxCachedTiles` | `384` | tiles kept in memory |
 | `liveRedrawInterval` | `150` | milliseconds between redraws while the map is dragged or zoomed without animation (pinch, smooth wheel zoom): tiles are loaded and their finished images drawn during the gesture (labels only move with the map); `0`: only at its end |
+| `language` | `null` | labels in this language where the style has `name:<lang>` / `name_<lang>` fields (OpenMapTiles, Shortbread: OpenFreeMap, VersaTiles), e.g. `'de'`; `setLanguage()` at runtime |
 | `colorScheme` | `null` | the style in other colors: `'pale'`, `'grayscale'`, `'dark'`, `'contrast'`, `'colorblind'`, `'sepia'`, `'tint:<color>'` or a function, see [Color schemes](#color-schemes) |
 | `gpuTileRendering` | `false` | render the tile images on the GPU. Chrome and Edge accelerate canvases on the GPU, but dense vector tiles (thousands of small paths) are faster in software on the worker thread and keep the GPU free for the page |
 | `fadeDuration` | `200` | milliseconds to fade in new tiles and labels; `0`: no fading |
@@ -309,8 +311,7 @@ zoom (map option `smoothWheelZoom`) is off by default.
   client, so WebMercator tiles can't be shown in a map in another projection.
 - **Rendering:** Canvas 2D, not WebGL. Complex styles render well, but a new zoom step takes longer to fill in than
   in MapLibre. Labels are placed on the main thread on every redraw.
-- **Not supported:** `line-offset`, `*-translate`, `text-variable-anchor`, `icon-text-fit`, `heatmap`, `hillshade`
-  and `raster` layers, `geojson` and `raster` sources, `feature-state` (always null). `fill-extrusion` is drawn flat;
+- **Not supported:** `heatmap`, `hillshade` and `raster` layers, `geojson` and `raster` sources, `feature-state` (always null). `fill-extrusion` is drawn flat;
   `format` joins its sections (no font or scale per section). A source that can't be loaded is left out (`error`
   event), the others are drawn.
 - **Fonts:** CSS fonts are used. `text-font` "Arial Bold" becomes `bold … "Arial"`. Glyph PBFs of the style are not

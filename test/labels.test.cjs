@@ -125,3 +125,49 @@ test('runs: consecutive geometry layers of one source, labels and backgrounds le
         { source: 'base', from: 8, to: 8, index: 3 }
     ]);
 });
+
+const { localizeTextField, anchorOffset, justification } = plugin._internals;
+
+test('language: name fields of text-field prefer name:<lang> / name_<lang>', () => {
+    const expected = ['coalesce', ['get', 'name:de'], ['get', 'name_de'], ['get', 'name']];
+    assert.deepEqual(plain(localizeTextField(['get', 'name'], 'de')), expected);
+    assert.deepEqual(plain(localizeTextField('{name}', 'de')), expected, 'a legacy token');
+    assert.deepEqual(plain(localizeTextField(['coalesce', ['get', 'name_en'], ['get', 'name']], 'de')),
+        ['coalesce', ['coalesce', ['get', 'name:de'], ['get', 'name_de'], ['get', 'name_en']], expected]);
+    assert.deepEqual(plain(localizeTextField('{name:latin}\n{name:nonlatin}', 'de')), ['concat',
+        ['coalesce', ['get', 'name:de'], ['get', 'name_de'], ['get', 'name:latin']], '\n',
+        ['coalesce', ['get', 'name:de'], ['get', 'name_de'], ['get', 'name:nonlatin']]]);
+    assert.equal(localizeTextField('{ref}', 'de'), '{ref}', 'other fields untouched');
+    assert.deepEqual(plain(localizeTextField(['get', 'ref'], 'de')), ['get', 'ref']);
+    assert.equal(localizeTextField('Wien', 'de'), 'Wien');
+    // the result evaluates as expected
+    const f = { properties: { name: 'Wien', 'name:en': 'Vienna', name_de: 'Wien (de)' } };
+    assert.equal(shared.evaluateValue(localizeTextField(['get', 'name'], 'en'), f, 0), 'Vienna');
+    assert.equal(shared.evaluateValue(localizeTextField(['get', 'name'], 'de'), f, 0), 'Wien (de)');
+    assert.equal(shared.evaluateValue(localizeTextField(['get', 'name'], 'fr'), f, 0), 'Wien', 'fallback: the original');
+});
+
+test('text-variable-anchor: offsets away from the anchor point; text-justify auto', () => {
+    assert.deepEqual(plain(anchorOffset('top', 1, [0, 0])), [0, 1]);
+    assert.deepEqual(plain(anchorOffset('right', 2, [0, 0])), [-2, 0]);
+    const d = plain(anchorOffset('bottom-left', 1, [0, 0]));
+    assert.ok(Math.abs(d[0] - Math.SQRT1_2) < 1e-9 && Math.abs(d[1] + Math.SQRT1_2) < 1e-9);
+    assert.deepEqual(plain(anchorOffset('top', null, [0, 0.8])), [0, 0.8], 'no radial offset: the text-offset');
+    assert.equal(justification('auto', 'top-left'), 'left');
+    assert.equal(justification('auto', 'right'), 'right');
+    assert.equal(justification('auto', 'top'), 'center');
+    assert.equal(justification('right', 'left'), 'right');
+});
+
+test('line-offset: a line moved to the right of its direction', () => {
+    const calls = [];
+    const ctx = { moveTo: (x, y) => calls.push(['M', x, y]), lineTo: (x, y) => calls.push(['L', x, y]), closePath() {} };
+    const id = p => p[0];
+    // eastwards, offset 3: south (y + 3 on screen)
+    shared.addOffsetPath(ctx, [[0, 10], [100, 10]], id, p => p[1], 3, false);
+    assert.deepEqual(calls, [['M', 0, 13], ['L', 100, 13]]);
+    // a right angle: the corner on the miter
+    calls.length = 0;
+    shared.addOffsetPath(ctx, [[0, 0], [100, 0], [100, 100]], id, p => p[1], 2, false);
+    assert.deepEqual(calls.map(c => c.slice(1).map(v => Math.round(v))), [[0, 2], [98, 2], [98, 100]]);
+});

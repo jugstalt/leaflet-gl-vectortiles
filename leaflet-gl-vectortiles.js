@@ -683,6 +683,34 @@
             if (close) ctx.closePath();
         }
 
+        // a path offset to the side (line-offset; positive: right of the line's direction), in canvas pixels:
+        // each vertex moved along the mean of the neighbor segments' normals (miter, limited)
+        function addOffsetPath(ctx, path, tx, ty, offset, close) {
+            var pts = [];
+            for (var i = 0; i < path.length; i++) {
+                var x = tx(path[i]), y = ty(path[i]), last = pts[pts.length - 1];
+                if (last && Math.abs(x - last[0]) < 0.5 && Math.abs(y - last[1]) < 0.5) continue;
+                pts.push([x, y]);
+            }
+            var n = pts.length;
+            if (n < 2) return;
+            var normals = [];
+            for (var k = 0; k < n - 1; k++) {
+                var dx = pts[k + 1][0] - pts[k][0], dy = pts[k + 1][1] - pts[k][1], len = Math.hypot(dx, dy) || 1;
+                normals.push([-dy / len, dx / len]);
+            }
+            for (var j = 0; j < n; j++) {
+                var a = normals[Math.max(0, j - 1)], b = normals[Math.min(n - 2, j)];
+                var mx = a[0] + b[0], my = a[1] + b[1], ml = Math.hypot(mx, my);
+                if (ml < 1e-6) { mx = b[0]; my = b[1]; ml = 1; }
+                mx /= ml; my /= ml;
+                var miter = Math.min(2, 1 / Math.max(0.5, mx * b[0] + my * b[1]));
+                var px = pts[j][0] + mx * offset * miter, py = pts[j][1] + my * offset * miter;
+                if (j === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+            }
+            if (close) ctx.closePath();
+        }
+
         var FILL_BATCH = 16;
 
         // anchor points of a symbol in canvas pixels: the points, the middle of a polygon/line ('point' placement),
@@ -811,9 +839,12 @@
                 }
                 if (!features.length) return;
 
+                // *-translate: the layer shifted by pixels
+                var translate = this._layerTranslate(styleLayer, zoom);
+                var x0 = d.x0 + translate[0], y0 = d.y0 + translate[1];
                 var scaleX = d.sx / layer.extent, scaleY = d.sy / layer.extent;
-                var tx = function (p) { return d.x0 + p[0] * scaleX; };
-                var ty = function (p) { return d.y0 + p[1] * scaleY; };
+                var tx = function (p) { return x0 + p[0] * scaleX; };
+                var ty = function (p) { return y0 + p[1] * scaleY; };
                 var self = this;
 
                 if (styleLayer.type === 'symbol') {
@@ -825,6 +856,16 @@
                 } else {
                     features.forEach(function (feature) { self._drawFeature(ctx, styleLayer, feature, zoom, tx, ty); });
                 }
+            },
+
+            // fill-translate, line-translate, circle-translate; symbols: text-translate (or icon-translate)
+            _layerTranslate: function (styleLayer, zoom) {
+                var type = styleLayer.type;
+                var name = type === 'symbol'
+                    ? ((styleLayer.paint || {})['text-translate'] !== undefined ? 'text-translate' : 'icon-translate')
+                    : type + '-translate';
+                var t = this._paint(styleLayer, name, null, zoom, null);
+                return Array.isArray(t) && t.length === 2 ? t : [0, 0];
             },
 
             _paint: function (styleLayer, name, feature, zoom, fallback) {
@@ -895,6 +936,7 @@
                 }
 
                 var wanted = type === 'fill' ? 'Polygon' : type === 'circle' ? 'Point' : null;
+                var lineOffset = type === 'line' ? this._paint(styleLayer, 'line-offset', null, zoom, 0) : 0;
 
                 ctx.beginPath();
                 var any = false;
@@ -903,7 +945,8 @@
                     any = true;
                     if (type === 'circle') return;   // circles below
                     feature.geometry.forEach(function (path) {
-                        addPath(ctx, path, tx, ty, type === 'fill' || path.closed);
+                        if (lineOffset) addOffsetPath(ctx, path, tx, ty, lineOffset, path.closed);
+                        else addPath(ctx, path, tx, ty, type === 'fill' || path.closed);
                     });
                 });
                 if (!any) return;
@@ -928,7 +971,8 @@
                         var width = this._paint(styleLayer, 'line-width', null, zoom, 1);
                         if (width <= 0) return;
                         ctx.globalAlpha = this._paint(styleLayer, 'line-opacity', null, zoom, 1);
-                        ctx.strokeStyle = this._paint(styleLayer, 'line-color', null, zoom, '#000');
+                        var linePattern = this._paint(styleLayer, 'line-pattern', null, zoom, null);
+                        ctx.strokeStyle = (linePattern && this._pattern(ctx, linePattern)) || this._paint(styleLayer, 'line-color', null, zoom, '#000');
                         ctx.lineWidth = width;
                         ctx.lineJoin = this._layout(styleLayer, 'line-join', null, zoom, 'miter');
                         ctx.lineCap = this._layout(styleLayer, 'line-cap', null, zoom, 'butt');
@@ -987,11 +1031,19 @@
 
                     case 'line':
                         if (feature.type === 'Point') return;
-                        this._path(ctx, feature, tx, ty, feature.type === 'Polygon');
+                        var offset = this._paint(styleLayer, 'line-offset', feature, zoom, 0);
+                        if (offset) {
+                            ctx.beginPath();
+                            feature.geometry.forEach(function (path) { addOffsetPath(ctx, path, tx, ty, offset, path.closed); });
+                        } else {
+                            this._path(ctx, feature, tx, ty, feature.type === 'Polygon');
+                        }
                         var width = this._paint(styleLayer, 'line-width', feature, zoom, 1);
                         if (width <= 0) return;
                         ctx.globalAlpha = this._paint(styleLayer, 'line-opacity', feature, zoom, 1);
-                        ctx.strokeStyle = this._paint(styleLayer, 'line-color', feature, zoom, '#000');
+                        var pattern2 = this._paint(styleLayer, 'line-pattern', feature, zoom, null);
+                        pattern2 = pattern2 && this._pattern(ctx, resolveTokens(pattern2, feature));
+                        ctx.strokeStyle = pattern2 || this._paint(styleLayer, 'line-color', feature, zoom, '#000');
                         ctx.lineWidth = width;
                         ctx.lineJoin = this._layout(styleLayer, 'line-join', feature, zoom, 'miter');
                         ctx.lineCap = this._layout(styleLayer, 'line-cap', feature, zoom, 'butt');
@@ -1105,7 +1157,7 @@
         return {
             decodeTile: decodeTile, evaluate: evaluate, evaluateValue: evaluateValue, resolveTokens: resolveTokens,
             filterMatches: filterMatches, filterUsesZoom: filterUsesZoom, layerIsDataDriven: layerIsDataDriven,
-            addPath: addPath, makeCanvas: makeCanvas, symbolAnchors: symbolAnchors, iconInTile: iconInTile, parseColor: parseColor,
+            addPath: addPath, addOffsetPath: addOffsetPath, makeCanvas: makeCanvas, symbolAnchors: symbolAnchors, iconInTile: iconInTile, parseColor: parseColor,
             colorSchemeFunction: colorSchemeFunction, schemeColor: schemeColor, COLOR_SCHEMES: COLOR_SCHEMES,
             TileRenderer: TileRenderer
         };
@@ -1273,6 +1325,61 @@
         return style + weight + Math.round(size * 10) / 10 + 'px "' + words.join(' ') + '", sans-serif';
     }
 
+    // a name field (name, name_en, name:en, name:latin, name_int, …)
+    var NAME_FIELD = /^name([:_](en|latin|int|nonlatin|local|[a-z]{2}))?$/;
+
+    function localizedGet(field, lang) {
+        return ['coalesce', ['get', 'name:' + lang], ['get', 'name_' + lang], ['get', field]];
+    }
+
+    // text-field with name fields preferring the language: expressions (['get', 'name']) and {name} tokens
+    function localizeTextField(value, lang) {
+        if (typeof value === 'string') {
+            if (value.indexOf('{') < 0) return value;
+            var parts = [], re = /\{([^}]+)\}/g, last = 0, m, any = false;
+            while ((m = re.exec(value))) {
+                if (m.index > last) parts.push(value.slice(last, m.index));
+                if (NAME_FIELD.test(m[1])) { parts.push(localizedGet(m[1], lang)); any = true; }
+                else parts.push(['get', m[1]]);
+                last = re.lastIndex;
+            }
+            if (!any) return value;
+            if (last < value.length) parts.push(value.slice(last));
+            return parts.length === 1 ? parts[0] : ['concat'].concat(parts);
+        }
+        if (Array.isArray(value)) {
+            if (value[0] === 'get' && value.length === 2 && typeof value[1] === 'string' && NAME_FIELD.test(value[1])) {
+                return localizedGet(value[1], lang);
+            }
+            return value.map(function (v) { return localizeTextField(v, lang); });
+        }
+        return value;
+    }
+
+    // text-variable-anchor: the offset (ems) for an anchor, from text-radial-offset (or the absolute text-offset),
+    // away from the anchor point in the anchor's direction
+    function anchorOffset(name, radial, offset) {
+        var r = radial !== null && radial !== undefined ? radial : Math.max(Math.abs(offset[0] || 0), Math.abs(offset[1] || 0));
+        var d = r / Math.SQRT2;
+        switch (name) {
+            case 'top': return [0, r];
+            case 'bottom': return [0, -r];
+            case 'left': return [r, 0];
+            case 'right': return [-r, 0];
+            case 'top-left': return [d, d];
+            case 'top-right': return [-d, d];
+            case 'bottom-left': return [d, -d];
+            case 'bottom-right': return [-d, -d];
+        }
+        return [0, 0];
+    }
+
+    // text-justify: 'auto' follows the anchor (left anchors left, right anchors right)
+    function justification(justify, anchor) {
+        if (justify && justify !== 'auto') return justify;
+        return /left/.test(anchor || '') ? 'left' : /right/.test(anchor || '') ? 'right' : 'center';
+    }
+
     var ANCHORS = {
         'center': [-0.5, -0.5], 'top': [-0.5, 0], 'bottom': [-0.5, -1], 'left': [0, -0.5], 'right': [-1, -0.5],
         'top-left': [0, 0], 'top-right': [-1, 0], 'bottom-left': [0, -1], 'bottom-right': [-1, -1]
@@ -1411,6 +1518,8 @@
             // render tile images on the GPU (Chrome/Edge accelerate canvases; dense vector tiles are much faster in
             // software, on the worker thread); false: software rendering
             gpuTileRendering: false,
+            // labels in this language where the style has name:<lang> / name_<lang> fields (e.g. 'de'); null: as styled
+            language: null,
             // colors of the style (and sprite images) through a scheme: 'pale', 'grayscale', 'dark', 'contrast',
             // 'colorblind', 'sepia', 'tint:<color>' (e.g. 'tint:#1f6feb') or a function
             // (rgba, info) → rgba with rgba = [r, g, b, a] (0–255, alpha 0–1), info = { property, layer }.
@@ -2221,7 +2330,35 @@
             return runs;
         },
 
+        // option language: name fields of text-field (name, name_en, name:latin, …) preferring name:<lang> /
+        // name_<lang>; the original kept to switch the language again
+        _localize: function (style) {
+            var lang = this.options.language;
+            style.layers.forEach(function (l) {
+                if (l.type !== 'symbol' || !l.layout || l.layout['text-field'] === undefined) return;
+                if (l['gview:textField'] === undefined) l['gview:textField'] = l.layout['text-field'];
+                l.layout['text-field'] = lang ? localizeTextField(l['gview:textField'], lang) : l['gview:textField'];
+            });
+        },
+
+        /** Labels in another language ('de', 'en', …; null: as in the style), for styles with name:<lang> fields. */
+        setLanguage: function (lang) {
+            this.options.language = lang || null;
+            if (this._style) {
+                this._localize(this._style);
+                this._renderer.setStyle(this._style);
+                if (this._worker) this._worker.postMessage({ type: 'style', style: this._style });
+                this._sprites = {};
+                this._spriteCount = 0;
+                this._curvedCache = {};
+                this._shownIds = {};
+                if (this._map) this._redraw();
+            }
+            return this;
+        },
+
         _markIconsInTiles: function (style) {
+            this._localize(style);
             // 3D buildings (fill-extrusion) seen from above: flat fills with their color and opacity
             style.layers.forEach(function (l) {
                 if (l.type !== 'fill-extrusion') return;
@@ -3032,6 +3169,13 @@
             var keepViewport = placement === 'line-center' || this._layout(styleLayer, 'text-rotation-alignment', feature, zoom, 'map') === 'viewport';
             var spacing = placement === 'line' ? this._layout(styleLayer, 'symbol-spacing', feature, zoom, 250) : 0;
             var anchorPoints = symbolAnchors(feature, placement, spacing, keepViewport, tx, ty);
+            var shift = this._renderer._layerTranslate(styleLayer, zoom);
+            if (shift[0] || shift[1]) {
+                anchorPoints.forEach(function (a) {
+                    a.x += shift[0]; a.y += shift[1];
+                    if (a.path) a.path = a.path.map(function (pt) { return [pt[0] + shift[0], pt[1] + shift[1]]; });
+                });
+            }
             var iconEntry = iconName ? this._spriteEntry(iconName) : null;
             var iconColor = this._paint(styleLayer, 'icon-color', feature, zoom, null);
 
@@ -3040,6 +3184,7 @@
                 if (a.x < clip[0] || a.y < clip[1] || a.x >= clip[0] + clip[2] || a.y >= clip[1] + clip[3]) return;
                 if (area && (a.x < 0 || a.y < 0 || a.x > area.x || a.y > area.y)) return;
 
+                var variable = self._layout(styleLayer, 'text-variable-anchor', feature, zoom, null);
                 labels.push({
                     id: styleLayer.id + '|' + (iconName || '') + '|' + (text || ''),
                     // the same label in another style layer (styles often have one layer per zoom range)
@@ -3065,6 +3210,14 @@
                     maxWidth: self._layout(styleLayer, 'text-max-width', feature, zoom, 10),
                     anchor: self._layout(styleLayer, 'text-anchor', feature, zoom, 'center'),
                     offset: self._layout(styleLayer, 'text-offset', feature, zoom, [0, 0]),
+                    // text-variable-anchor: the first of these anchors where the label fits (text-radial-offset)
+                    anchors: Array.isArray(variable) && variable.length ? variable : null,
+                    radialOffset: self._layout(styleLayer, 'text-radial-offset', feature, zoom, null),
+                    justify: self._layout(styleLayer, 'text-justify', feature, zoom, 'center'),
+                    lineHeight: self._layout(styleLayer, 'text-line-height', feature, zoom, 1.2),
+                    // icon-text-fit: the icon stretched around the text (road shields)
+                    iconTextFit: self._layout(styleLayer, 'icon-text-fit', feature, zoom, 'none'),
+                    iconTextFitPadding: self._layout(styleLayer, 'icon-text-fit-padding', feature, zoom, [0, 0, 0, 0]),
                     textRotate: self._layout(styleLayer, 'text-rotate', feature, zoom, 0) * Math.PI / 180,
                     textOverlap: self._layout(styleLayer, 'text-allow-overlap', feature, zoom, false),
                     padding: self._layout(styleLayer, 'text-padding', feature, zoom, 2),
@@ -3184,7 +3337,7 @@
                         if (current) lines.push(current);
                     }
 
-                    var lineHeight = l.size * 1.2;
+                    var lineHeight = l.size * (l.lineHeight || 1.2);
                     var width = Math.max.apply(null, lines.map(function (line) { return measure(line); }));
                     var height = lineHeight * lines.length;
                     setLetterSpacing(0);
@@ -3208,18 +3361,39 @@
                             };
                         }
                     } else if (!(l.alongLine && width > l.lineLength)) {
-                        // longer than its line: no text there, as GL
-                        var anchor = ANCHORS[l.anchor] || ANCHORS.center;
-                        var dx = anchor[0] * width + (l.offset[0] || 0) * l.size;
-                        var dy = anchor[1] * height + (l.offset[1] || 0) * l.size;
+                        // longer than its line: no text there, as GL. Variable anchors: the first one that fits.
+                        var candidates = l.anchors && !l.alongLine ? l.anchors : [l.anchor];
                         var angle = l.angle + l.textRotate;
-                        text = {
-                            lines: lines, lineHeight: lineHeight, width: width, height: height, dx: dx, dy: dy, angle: angle,
-                            box: rotatedBox(l, dx, dy, width, height, angle, l.padding)
-                        };
+                        for (var ci = 0; ci < candidates.length; ci++) {
+                            var name = candidates[ci], anchor = ANCHORS[name] || ANCHORS.center;
+                            var off = l.anchors && !l.alongLine ? anchorOffset(name, l.radialOffset, l.offset) : l.offset;
+                            var dx = anchor[0] * width + (off[0] || 0) * l.size;
+                            var dy = anchor[1] * height + (off[1] || 0) * l.size;
+                            var candidate = {
+                                lines: lines, lineHeight: lineHeight, width: width, height: height, dx: dx, dy: dy, angle: angle,
+                                justify: justification(l.justify, name),
+                                box: rotatedBox(l, dx, dy, width, height, angle, l.padding)
+                            };
+                            if (!text) text = candidate;   // none fits: the first
+                            if (!declutter || l.textOverlap || !collides(candidate.box)) { text = candidate; break; }
+                        }
                     }
                 }
                 if (!icon && !text) return;
+                // the text could not be laid out (longer than its line, too curved): without it no icon either, unless
+                // the text is optional (as GL; otherwise empty road shields)
+                if (l.text && !text && !l.textOptional) return;
+
+                // ---- icon-text-fit: the icon stretched around the text (padding: top, right, bottom, left)
+                if (icon && text && !text.glyphs && l.iconTextFit && l.iconTextFit !== 'none') {
+                    var pad = l.iconTextFitPadding || [0, 0, 0, 0];
+                    var fitW = l.iconTextFit !== 'height', fitH = l.iconTextFit !== 'width';
+                    if (fitW) icon.w = text.width + pad[1] + pad[3];
+                    if (fitH) icon.h = text.height + pad[0] + pad[2];
+                    icon.cx = fitW ? text.dx - pad[3] + icon.w / 2 : 0;
+                    icon.cy = fitH ? text.dy - pad[0] + icon.h / 2 : 0;
+                    icon.box = [l.x + icon.cx - icon.w / 2, l.y + icon.cy - icon.h / 2, l.x + icon.cx + icon.w / 2, l.y + icon.cy + icon.h / 2];
+                }
 
                 // ---- placement: icon and text of a symbol are placed together, as GL does
                 var iconFits = !icon || !declutter || l.iconOverlap || !collides(icon.box);
@@ -3315,15 +3489,17 @@
 
         _textSprite: function (l, text) {
             var halo = l.haloColor && l.haloWidth > 0, pad = (halo ? l.haloWidth : 0) + Math.ceil(l.size * 0.25);
-            var key = 't|' + l.font + '|' + l.letterSpacing + '|' + l.color + '|' + (halo ? l.haloColor + '|' + l.haloWidth : '') + '|' + text.lines.join('\n');
+            var justify = text.justify || 'center';
+            var key = 't|' + l.font + '|' + l.letterSpacing + '|' + l.color + '|' + (halo ? l.haloColor + '|' + l.haloWidth : '') + '|' + justify + '|' + text.lineHeight + '|' + text.lines.join('\n');
             return this._labelImage(key, text.width, text.height, pad, function (ctx) {
                 ctx.font = l.font;
                 if ('letterSpacing' in ctx) ctx.letterSpacing = l.letterSpacing ? l.letterSpacing * l.size + 'px' : '0px';
                 ctx.textBaseline = 'top';
-                ctx.textAlign = 'center';
+                ctx.textAlign = justify;
                 ctx.lineJoin = 'round';
                 text.lines.forEach(function (line, i) {
-                    var lx = pad + text.width / 2, ly = pad + i * text.lineHeight + (text.lineHeight - l.size) / 2;
+                    var lx = justify === 'left' ? pad : justify === 'right' ? pad + text.width : pad + text.width / 2;
+                    var ly = pad + i * text.lineHeight + (text.lineHeight - l.size) / 2;
                     if (halo) {
                         ctx.lineWidth = l.haloWidth * 2;
                         ctx.strokeStyle = l.haloColor;
@@ -3435,7 +3611,7 @@
                 if (p.icon) {
                     ctx.globalAlpha = alpha * (l.iconOpacity === undefined ? 1 : l.iconOpacity);
                     place(x, y, l.angle + l.iconRotate);
-                    ctx.drawImage(self._iconCanvas(l.icon), -p.icon.w / 2, -p.icon.h / 2, p.icon.w, p.icon.h);
+                    ctx.drawImage(self._iconCanvas(l.icon), (p.icon.cx || 0) - p.icon.w / 2, (p.icon.cy || 0) - p.icon.h / 2, p.icon.w, p.icon.h);
                     ctx.globalAlpha = 1;
                 }
                 if (!p.text) continue;
@@ -3746,7 +3922,10 @@
     GLVectorTiles.evaluate = evaluateValue;
     GLVectorTiles.shared = gvShared;
     // for the tests (not a public API)
-    GLVectorTiles._internals = { resolveUrl: resolveUrl, placeAlongPath: placeAlongPath, cssFont: cssFont, imageLayout: imageLayout };
+    GLVectorTiles._internals = {
+        resolveUrl: resolveUrl, placeAlongPath: placeAlongPath, cssFont: cssFont, imageLayout: imageLayout,
+        localizeTextField: localizeTextField, anchorOffset: anchorOffset, justification: justification
+    };
 
     L.GLVectorTiles = GLVectorTiles;
     L.glVectorTiles = function (url, options) {
