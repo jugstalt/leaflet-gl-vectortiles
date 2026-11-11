@@ -116,3 +116,134 @@ test('tiles in the worker: an error in transformRequest is a tile error', async 
     assert.equal(layer._active, 0);
     assert.equal(layer._tiles.k1.status, 'error');
 });
+
+test('a failed tile is requested again (tileRetries), then a tileerror event', () => {
+    const timers = [];
+    context.setTimeout = (fn, ms) => timers.push({ fn, ms });
+    const layer = layerWith({ tileRetries: 2 });
+    layer._tiles = {};
+    layer._tileOrder = [];
+    layer._tileRetries = {};
+    layer._map = {};
+    layer._moving = false;
+    layer.updates = 0;
+    layer._update = () => { layer.updates++; };
+    layer._checkLoading = () => {};
+    layer.events = [];
+    layer.fire = (type, data) => layer.events.push({ type, data });
+
+    const fail = () => {
+        const entry = { status: 'error', url: 'https://gview.example/t.pbf' };
+        layer._tiles.k = entry;
+        layer._tileOrder.push('k');
+        layer._tileError('k', entry, new Error('400'));
+    };
+    fail();
+    assert.equal(timers.length, 1);
+    assert.ok(timers[0].ms >= 500 && timers[0].ms < 800);
+    timers[0].fn();
+    assert.equal(layer._tiles.k, undefined);   // requested again by _update
+    assert.deepEqual(plain(layer._tileOrder), []);
+    assert.equal(layer.updates, 1);
+    fail();
+    assert.ok(timers[1].ms >= 1000);
+    timers[1].fn();
+    assert.equal(layer.events.length, 0);
+    fail();   // the third error: no more retries
+    assert.equal(timers.length, 2);
+    assert.equal(layer.events.length, 1);
+    assert.equal(layer.events[0].type, 'tileerror');
+    assert.equal(layer._tileRetries.k, undefined);
+});
+
+test('a retry is skipped when the tile was dropped meanwhile', () => {
+    const timers = [];
+    context.setTimeout = (fn, ms) => timers.push({ fn, ms });
+    const layer = layerWith({ tileRetries: 2 });
+    Object.assign(layer, { _tiles: {}, _tileOrder: [], _tileRetries: {}, _map: {}, _moving: false, _checkLoading() {} });
+    let updates = 0;
+    layer._update = () => { updates++; };
+    const entry = { status: 'error' };
+    layer._tiles.k = entry;
+    layer._tileError('k', entry, new Error('x'));
+    const newer = { status: 'loading' };
+    layer._tiles.k = newer;
+    timers[0].fn();
+    assert.equal(layer._tiles.k, newer);
+    assert.equal(updates, 0);
+});
+
+// _requestTiles with a stub grid: tiles are numbers on a line, `view` the visible ones; ring r adds r on each side
+function requestLayer() {
+    const layer = layerWith({ preload: 1 });
+    layer.messages = [];
+    layer._worker = { postMessage: m => layer.messages.push(plain(m)) };
+    layer._sources = { s: { grid: {} } };
+    layer._tiles = {};
+    layer._tileOrder = [];
+    layer.view = [10, 11, 12];
+    layer._mapResolution = () => 1;
+    layer._canvasSize = () => ({ x: 100, y: 100 });
+    layer._level = () => 0;
+    layer._visibleTiles = (grid, level, ring = 0) => {
+        const out = [];
+        for (let c = layer.view[0] - ring; c <= layer.view[layer.view.length - 1] + ring; c++) out.push({ col: c });
+        return out;
+    };
+    layer._key = (id, t) => String(t.col);
+    layer._tileEnvelope = () => ({ minX: 0, maxX: 0, minY: 0, maxY: 0 });
+    layer._toCanvas = () => ({ x: 0, y: 0 });
+    layer._pump = () => {};
+    layer._pruneCache = () => {};
+    layer._checkLoading = () => {};
+    return layer;
+}
+const loading = () => ({ status: 'loading', inWorker: true, used: 0, filtered: {} });
+const aborts = layer => layer.messages.filter(m => m.type === 'abort').map(m => m.key);
+
+test('requests near the view (one ring beyond the preload ring) are not aborted', () => {
+    const layer = requestLayer();
+    layer._tiles = { 8: loading(), 7: loading(), 30: loading() };   // 8: preload+1 ring, 7 and 30: far
+    layer._moving = false;
+    layer._requestTiles();
+    assert.deepEqual(aborts(layer).sort(), ['30', '7']);
+    assert.ok(layer._tiles[8]);
+});
+
+test('during a gesture a request is aborted only when unneeded for a while, not when the view comes back', () => {
+    const layer = requestLayer();
+    const vm = require('vm');
+    const contextDate = vm.runInContext('Date', context);
+    const realNow = contextDate.now;
+    let now = 1000000;
+    contextDate.now = () => now;
+    try {
+        layer._tiles = { 30: loading() };
+        layer._moving = true;
+        layer._requestTiles();
+        assert.deepEqual(aborts(layer), []);   // just left the view
+        now += 500;
+        layer.view = [29, 30, 31];             // back again: needed, the clock starts anew
+        layer._requestTiles();
+        layer.view = [10, 11, 12];
+        now += 600;
+        layer._requestTiles();
+        assert.deepEqual(aborts(layer), []);   // unneeded for 0 ms only
+        now += 1000;
+        layer._requestTiles();
+        assert.deepEqual(aborts(layer), ['30']);
+        assert.equal(layer._tiles[30], undefined);
+    } finally {
+        contextDate.now = realNow;
+    }
+});
+
+test('at the end of a gesture requests far from the view are aborted at once', () => {
+    const layer = requestLayer();
+    layer._tiles = { 30: loading() };
+    layer._moving = true;
+    layer._requestTiles();
+    layer._moving = false;
+    layer._requestTiles();
+    assert.deepEqual(aborts(layer), ['30']);
+});

@@ -143,6 +143,7 @@ otherwise zooming beyond it gives no scale in Leaflet.
 | `declutter` | `true` | hide labels and icons overlapping earlier ones |
 | `worker` | `true` | render in a web worker where the browser supports it |
 | `maxConcurrentRequests` | `8` | tile requests at the same time |
+| `tileRetries` | `2` | a failed tile request is repeated this often (after 0.5 s, 1 s) before a `tileerror` event; `0`: never |
 | `maxConcurrentRenders` | `4` | tile images rendered in the worker at the same time |
 | `renderBudget` | `12` | milliseconds per frame for rendering tile images on the main thread (fallback) |
 | `maxCachedTiles` | `384` | tiles kept in memory |
@@ -175,7 +176,7 @@ Events:
 | `styleload` | the style, sources and sprite are loaded (`e.style`); from now on the style can be changed |
 | `loading` | visible tiles start to load |
 | `load` | all visible tiles are loaded and drawn |
-| `tileerror` | a tile could not be loaded (`e.key`, `e.url`, `e.error`); 404 and 204 count as empty tiles |
+| `tileerror` | a tile could not be loaded, also not after `tileRetries` repetitions (`e.key`, `e.url`, `e.error`); 404 and 204 count as empty tiles |
 | `error` | the style or a source could not be loaded (`e.error`) |
 
 Methods: `getStyle()`, `getGrid()`, `setOpacity(opacity)`, `setZIndex(zIndex)` and the style methods below.

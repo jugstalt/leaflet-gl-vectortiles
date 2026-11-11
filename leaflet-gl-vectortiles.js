@@ -1613,6 +1613,9 @@
     // ------------------------------------------------------------------------------------------
 
     // option lowPower: fewer pixels, no redraws during gestures, less memory and parallel work
+    // ms a running tile request may be unneeded during a gesture before it is aborted
+    var ABORT_DELAY = 1000;
+
     var LOW_POWER = {
         maxPixelRatio: 1,
         padding: 0,
@@ -1683,6 +1686,8 @@
             lowPower: false,
             // fetch options, e.g. { credentials: 'include' } or { headers: { Authorization: ... } }
             fetchOptions: {},
+            // a failed tile request is repeated this often (after 0.5 s, 1 s, ...) before a tileerror event
+            tileRetries: 2,
             // a TileJSON instead of a style: a schematic default style from its vector_layers (false: an error)
             defaultStyle: true,
             // function (url, resourceType) per request: { url, headers, credentials, ... } (headers added to those of
@@ -1719,6 +1724,7 @@
             this._url = url.replace(/\/+$/, '');
             this._tiles = {};        // key → { status, layers, used, filtered }
             this._tileOrder = [];
+            this._tileRetries = {};  // key → requests repeated after an error
             this._style = null;
             this._sources = {};      // id → { grid, zooms, tileUrl, gview, minLevel, maxLevel }
             this._sprite = null;     // { index, image, pixelRatio }
@@ -1997,7 +2003,24 @@
             }
         },
 
+        // a failed tile is requested again (option tileRetries, after 0.5 s, 1 s, ...): servers that fail now and
+        // then (e.g. two requests of the same tile at once) leave no holes. Then a tileerror event
         _tileError: function (key, entry, error) {
+            var retries = this._tileRetries[key] || 0;
+            if (retries < (this.options.tileRetries || 0)) {
+                this._tileRetries[key] = retries + 1;
+                var self = this;
+                setTimeout(function () {
+                    if (self._tiles[key] !== entry) return;   // dropped or replaced meanwhile
+                    delete self._tiles[key];
+                    var i = self._tileOrder.indexOf(key);
+                    if (i >= 0) self._tileOrder.splice(i, 1);
+                    if (self._map && !self._moving) self._update();   // otherwise at the end of the gesture
+                }, 500 * Math.pow(2, retries) + Math.random() * 250);
+                this._checkLoading();
+                return;
+            }
+            delete this._tileRetries[key];
             this.fire('tileerror', { key: key, url: entry && entry.url, error: error });
             this._checkLoading();
         },
@@ -2413,6 +2436,7 @@
                         entry.layers = m.layers;
                         entry.filtered = m.filtered;
                         entry.status = 'loaded';
+                        delete this._tileRetries[m.key];
                         if (this._visibleKeys[m.key]) this._scheduleRedraw();   // preloaded: drawn when visible
                     }
                     this._pump();
@@ -2879,7 +2903,7 @@
         _requestTiles: function () {
             var resolution = this._mapResolution(), self = this;
             var size = this._canvasSize(), cx = size.x / 2, cy = size.y / 2;
-            var wanted = {}, pending = [], visible = {};
+            var wanted = {}, pending = [], visible = {}, keep = {};
 
             Object.keys(this._sources).forEach(function (id) {
                 var source = self._sources[id];
@@ -2898,6 +2922,12 @@
                     pending.push({ key: key, sourceId: id, t: t, priority: Math.hypot(p.x - cx, p.y - cy) });
                 });
 
+                // running requests of one more ring of tiles around the canvas are not aborted: a small move back
+                // needs them again (slow servers, e.g. tiles rendered on the fly, would never finish them)
+                self._visibleTiles(source.grid, level, (self.options.preload > 0 ? self.options.preload : 0) + 1).forEach(function (t) {
+                    keep[self._key(id, t)] = true;
+                });
+
                 // preloading: the tiles around the canvas, after the visible ones
                 if (!(self.options.preload > 0)) return;
                 self._visibleTiles(source.grid, level, self.options.preload).forEach(function (t) {
@@ -2911,10 +2941,16 @@
                 });
             });
 
-            // requests for tiles that are no longer visible (fast zooming or panning) are aborted
+            // requests for tiles no longer near the view are aborted, during a gesture only when they have not been
+            // needed for a while: zooming and panning pass tiles and levels back and forth, a request aborted now
+            // would be made again a moment later (and the server renders an aborted tile anyway)
+            var now = Date.now(), moving = this._moving;
             Object.keys(this._tiles).forEach(function (key) {
                 var entry = self._tiles[key];
-                if (entry.status === 'loading' && !wanted[key]) {
+                if (entry.status !== 'loading') return;
+                if (wanted[key] || keep[key]) { entry.unwanted = 0; return; }
+                if (!entry.unwanted) entry.unwanted = now;
+                if (!moving || now - entry.unwanted >= ABORT_DELAY) {
                     if (entry.inWorker && self._worker) self._worker.postMessage({ type: 'abort', key: key });
                     else if (entry.controller) entry.controller.abort();
                     else return;
@@ -2993,6 +3029,7 @@
                     entry.layers = buffer.byteLength ? decodeTile(buffer) : {};
                     entry.status = 'loaded';
                     entry.controller = null;
+                    delete self._tileRetries[job.key];
                     self._scheduleRedraw();
                 })
                 .catch(function (error) {
