@@ -92,7 +92,7 @@ declare module 'leaflet' {
             debug?: boolean;
             maxCachedTiles?: number;
             maxConcurrentRequests?: number;
-            /** a failed tile request is repeated this often (after 0.5 s, 1 s, ...) before a tileerror event (default 2) */
+            /** a failed tile request is repeated this often (after 0.5 s, 1 s, ...) before a tileerror event (default 0) */
             tileRetries?: number;
             /** milliseconds per frame for rendering tile images on the main thread (fallback) */
             renderBudget?: number;

@@ -1687,7 +1687,7 @@
             // fetch options, e.g. { credentials: 'include' } or { headers: { Authorization: ... } }
             fetchOptions: {},
             // a failed tile request is repeated this often (after 0.5 s, 1 s, ...) before a tileerror event
-            tileRetries: 2,
+            tileRetries: 0,
             // a TileJSON instead of a style: a schematic default style from its vector_layers (false: an error)
             defaultStyle: true,
             // function (url, resourceType) per request: { url, headers, credentials, ... } (headers added to those of

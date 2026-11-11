@@ -58,7 +58,7 @@ From a CDN (minified build of the npm package):
 ```html
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@jugstalt/leaflet-gl-vectortiles@0.5.0/leaflet-gl-vectortiles.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@jugstalt/leaflet-gl-vectortiles@0.6.0/leaflet-gl-vectortiles.min.js"></script>
 ```
 
 With npm (`L.glVectorTiles` is added to Leaflet's `L`):
@@ -143,7 +143,7 @@ otherwise zooming beyond it gives no scale in Leaflet.
 | `declutter` | `true` | hide labels and icons overlapping earlier ones |
 | `worker` | `true` | render in a web worker where the browser supports it |
 | `maxConcurrentRequests` | `8` | tile requests at the same time |
-| `tileRetries` | `2` | a failed tile request is repeated this often (after 0.5 s, 1 s) before a `tileerror` event; `0`: never |
+| `tileRetries` | `0` | a failed tile request is repeated this often (after 0.5 s, 1 s, ...) before a `tileerror` event, for servers that fail now and then; off by default, so server errors stay visible |
 | `maxConcurrentRenders` | `4` | tile images rendered in the worker at the same time |
 | `renderBudget` | `12` | milliseconds per frame for rendering tile images on the main thread (fallback) |
 | `maxCachedTiles` | `384` | tiles kept in memory |

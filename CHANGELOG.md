@@ -1,14 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.6.0
 
 - Fix: slow tile servers (e.g. gView rendering tiles on the fly) got the same tiles requested and aborted again and
   again while zooming back and forth, so they never finished. Running requests near the view (one ring beyond the
   preload ring) are no longer aborted; during a gesture a request is aborted only when it has not been needed for
   1 s, at its end at once. In a test with 1.5 s per tile: about half the requests, the map complete sooner.
-- A failed tile request is repeated (option `tileRetries`, default 2, after 0.5 s and 1 s) before the `tileerror`
-  event: servers that fail now and then (e.g. gView rendering the same tile for two requests at once) leave no holes
-  in the map.
+- Option `tileRetries` (default 0: off): a failed tile request is repeated this often (after 0.5 s, 1 s, ...) before
+  the `tileerror` event, for servers that fail now and then.
 
 ## 0.5.0
 
