@@ -5,6 +5,9 @@
 - `gpuTileRendering: 'auto'` (new default): tile images on the GPU on WebKit (Safari, all browsers on iOS/iPadOS),
   where the software canvas is slow for dense styles such as basemap.at; in software on Chromium and Firefox as
   before. `true` / `false` force it. Example page: a select Auto / GPU / Software.
+- `maxPixelRatio` default `2` (was: the screen's): phones with a device pixel ratio of 3 (iPhone, many Android phones)
+  render less than half the pixels, hardly visible. `null` for the screen's ratio as before. Images for printing
+  (`pixelRatio`) are not limited by it.
 
 ## 0.6.1
 

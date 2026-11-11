@@ -156,7 +156,7 @@ otherwise zooming beyond it gives no scale in Leaflet.
 | `preload` | `1` | rings of tiles loaded around the visible ones (after them); `0`: none |
 | `iconsInTiles` | `true` | icon-only symbol layers with `icon-allow-overlap` are drawn into the tile images (much less work per frame, e.g. the footpath dots of basemap.at); they don't hide other labels then, as with `icon-ignore-placement` |
 | `pixelRatio` | `null` | render at exactly this pixel ratio (e.g. dpi / 96); `null`: the screen's (see `maxPixelRatio`) |
-| `maxPixelRatio` | `null` | render at most at this device pixel ratio, e.g. `1` on high-DPI screens; `null`: the screen's |
+| `maxPixelRatio` | `2` | render at most at this device pixel ratio. Phones (iPhone, many Android phones) have 3: at 2 there are less than half the pixels to render (4 instead of 9 per CSS pixel), hardly visible. `1`: less sharp on high-DPI screens; `null`: always the screen's |
 | `lowPower` | `false` | economical defaults for weak clients, see [Performance](#performance) |
 | `padding` | `0.15` | the canvas reaches this part of the map size beyond each edge, so panning shows map there at once |
 | `fetchOptions` | `{}` | options for `fetch`, e.g. `{ credentials: 'include' }` or headers for authorization |
@@ -336,7 +336,7 @@ L.glVectorTiles(url, { lowPower: true, padding: 0.1 })   // economical, but with
 
 | Option | Default | `lowPower` | Effect |
 |---|---|---|---|
-| `maxPixelRatio` | screen | `1` | biggest lever: at a device pixel ratio of 2 (3) there are 4 (9) times the pixels to render; less sharp |
+| `maxPixelRatio` | `2` | `1` | biggest lever: at a device pixel ratio of 2 (3) there are 4 (9) times the pixels to render; less sharp |
 | `liveRedrawInterval` | `150` | `0` | no loading and drawing during gestures, only at their end |
 | `padding` | `0.15` | `0` | the canvas is only as big as the map: less memory, panning shows empty edges until the end |
 | `maxCachedTiles` | `384` | `128` | less memory, tiles are loaded again more often |

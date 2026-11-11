@@ -115,7 +115,7 @@ declare module 'leaflet' {
             liveRedrawInterval?: number;
             /** the canvas beyond each edge, as part of the map size (default 0.15) */
             padding?: number;
-            /** render at most at this device pixel ratio */
+            /** render at most at this device pixel ratio (default 2: phones with 3 render less than half the pixels); null: the screen's */
             maxPixelRatio?: number | null;
             /** render at exactly this pixel ratio (e.g. dpi / 96) */
             pixelRatio?: number | null;

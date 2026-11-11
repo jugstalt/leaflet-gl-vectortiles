@@ -1668,9 +1668,9 @@
             liveRedrawInterval: 150,
             // the canvas reaches this part of the map size beyond each edge: panning shows map there at once
             padding: 0.15,
-            // render at most at this device pixel ratio (e.g. 1 on high-DPI screens: less sharp, a fraction of
-            // the pixels to render); null = the screen's ratio
-            maxPixelRatio: null,
+            // render at most at this device pixel ratio: 2 (default) on phones with 3 renders less than half the
+            // pixels, hardly visible; 1: less sharp on high-DPI screens, a fraction of the pixels; null: the screen's
+            maxPixelRatio: 2,
             // render at exactly this pixel ratio (e.g. for printing: dpi / 96); null: the screen's (see maxPixelRatio)
             pixelRatio: null,
             // the base URL for relative URLs in a style object (default: the page)

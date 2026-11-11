@@ -273,3 +273,22 @@ test('gpuTileRendering: true / false force it, auto asks the browser', () => {
     layer.options.gpuTileRendering = 'auto';
     assert.equal(layer._gpuTiles(), false);   // no navigator in the test sandbox
 });
+
+test('maxPixelRatio 2 (default) on a screen with 3; pixelRatio (printing) is not limited', () => {
+    const ratio = options => {
+        const layer = Object.create(plugin.prototype);
+        layer.options = Object.assign({}, plugin.prototype.options, options);
+        return layer._ratio();
+    };
+    context.window.devicePixelRatio = 3;
+    try {
+        assert.equal(ratio({}), 2);
+        assert.equal(ratio({ maxPixelRatio: null }), 3);
+        assert.equal(ratio({ maxPixelRatio: 1 }), 1);
+        assert.equal(ratio({ pixelRatio: 300 / 96 }), 300 / 96);
+        context.window.devicePixelRatio = 1.5;
+        assert.equal(ratio({}), 1.5);
+    } finally {
+        delete context.window.devicePixelRatio;
+    }
+});
