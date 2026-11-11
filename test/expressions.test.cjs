@@ -249,3 +249,30 @@ test('color schemes: contrast, colorblind, sepia, tint', () => {
     assert.ok(dark[2] > dark[0] && dark[2] > 150, 'black → dark blue');
     assert.ok(colorSchemeFunction('tint:nonsense'), 'an unparsable tint color: a default tint');
 });
+
+test('highlighting: layers not highlighted dimmed (colors, icon opacity), highlighted ones untouched', () => {
+    const renderer = new shared.TileRenderer();
+    const roads = { id: 'roads', paint: { 'line-color': '#ff0000', 'icon-opacity': 1 } };
+    const water = { id: 'water', paint: { 'fill-color': '#0000ff', 'icon-opacity': 0.8 } };
+    renderer.setHighlight({ roads: true }, shared.colorSchemeFunction('grayscale'));
+    assert.equal(renderer._paint(roads, 'line-color', null, 10, null), '#ff0000', 'highlighted: as in the style');
+    assert.equal(renderer._paint(water, 'fill-color', null, 10, null), 'rgba(18,18,18,1)', 'dimmed: grayscale');
+    assert.equal(renderer._paint(roads, 'icon-opacity', null, 10, null), 1);
+    assert.ok(Math.abs(renderer._paint(water, 'icon-opacity', null, 10, null) - 0.28) < 1e-9, 'icons fainter');
+    // with a color scheme: the scheme for all, the dimming on top for the others
+    renderer.setColorScheme(shared.colorSchemeFunction('dark'));
+    const highlighted = renderer._paint(roads, 'line-color', null, 10, null);
+    assert.notEqual(highlighted, '#ff0000');
+    assert.equal(renderer._paint(water, 'fill-color', null, 10, null),
+        shared.schemeColor(shared.schemeColor('#0000ff', shared.colorSchemeFunction('dark')), shared.colorSchemeFunction('grayscale')));
+    renderer.setHighlight(null);
+    renderer.setColorScheme(null);
+    assert.equal(renderer._paint(water, 'fill-color', null, 10, null), '#0000ff', 'off again');
+});
+
+test('a scheme function depending on the layer: cached per layer', () => {
+    const renderer = new shared.TileRenderer();
+    renderer.setColorScheme((c, info) => info.layer === 'a' ? [0, 0, 0, c[3]] : [255, 255, 255, c[3]]);
+    assert.equal(renderer._paint({ id: 'a', paint: { 'fill-color': '#888' } }, 'fill-color', null, 1, null), 'rgba(0,0,0,1)');
+    assert.equal(renderer._paint({ id: 'b', paint: { 'fill-color': '#888' } }, 'fill-color', null, 1, null), 'rgba(255,255,255,1)');
+});

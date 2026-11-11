@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Highlighting: `highlight(layers, { dim })` keeps the colors of the given style layers and dims all others with a
+  color scheme (default `'pale'`, icons fainter); `highlight(null)` to end it. Works together with a color scheme.
+  Example page: a ★ button per theme.
+- Fix: the color cache of a color scheme now depends on the style layer (scheme functions using `info.layer`).
+
 - Color schemes: option `colorScheme` and `setColorScheme()` at runtime: `'pale'` (background for thematic data),
   `'grayscale'`, `'dark'` (lightness inverted, hues kept), `'contrast'` (accessibility: areas darker against white,
   text black/white), `'colorblind'` (red-green, daltonization), `'sepia'`, `'tint:<color>'` (shades of a house

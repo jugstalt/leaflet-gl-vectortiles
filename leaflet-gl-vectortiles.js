@@ -768,6 +768,13 @@
             setStyle: function (style) { this._style = style; this._patterns = {}; },
             setSprite: function (sprite) { this._sprite = sprite; this._patterns = {}; this._tintedIcons = {}; },
             setColorScheme: function (fn) { this._colorFn = fn; this._schemeCache = {}; this._patterns = {}; this._tintedIcons = {}; },
+            // highlighting: style layer ids → true; the other layers dimmed with dimFn (after the color scheme)
+            setHighlight: function (ids, dimFn) {
+                this._highlight = ids || null;
+                this._dimFn = ids ? dimFn : null;
+                this._schemeCache = {};
+                this._patterns = {};
+            },
 
             // all geometry layers of a source for one tile (d: { entry, x0, y0, sx, sy, clip })
             // the geometry layers of a source for one tile, optionally only the style layers from..to (a run)
@@ -822,14 +829,21 @@
 
             _paint: function (styleLayer, name, feature, zoom, fallback) {
                 var value = this._value(styleLayer, 'paint', name, feature, zoom, fallback);
-                // colors through the color scheme (cached per color)
-                if (this._colorFn && typeof value === 'string' && name.slice(-6) === '-color') {
-                    var key = name + '|' + value, cached = this._schemeCache[key];
+                var dimmed = this._highlight && !this._highlight[styleLayer.id];
+                // colors through the color scheme and, for layers not highlighted, the dimming (cached per layer
+                // and color: a scheme function may depend on the layer)
+                if ((this._colorFn || dimmed) && typeof value === 'string' && name.slice(-6) === '-color') {
+                    var key = styleLayer.id + '|' + name + '|' + value, cached = this._schemeCache[key];
                     if (cached === undefined) {
-                        cached = this._schemeCache[key] = schemeColor(value, this._colorFn, { property: name, layer: styleLayer.id });
+                        var info = { property: name, layer: styleLayer.id };
+                        cached = schemeColor(value, this._colorFn, info);
+                        if (dimmed) cached = schemeColor(cached, this._dimFn, info);
+                        this._schemeCache[key] = cached;
                     }
                     return cached;
                 }
+                // icons of layers not highlighted: fainter (the sprite is shared by all layers)
+                if (dimmed && name === 'icon-opacity') return (typeof value === 'number' ? value : 1) * 0.35;
                 return value;
             },
 
@@ -1109,6 +1123,16 @@
             switch (m.type) {
                 case 'style':
                     renderer.setStyle(m.style);
+                    break;
+
+                case 'highlight':
+                    var dimFn = null;
+                    try {
+                        dimFn = m.dimSource ? (new Function('return (' + m.dimSource + ');'))() : shared.colorSchemeFunction(m.dim);
+                    } catch (e) { dimFn = null; }
+                    var ids = null;
+                    if (m.ids) { ids = {}; m.ids.forEach(function (id) { ids[id] = true; }); }
+                    renderer.setHighlight(ids, dimFn);
                     break;
 
                 case 'scheme':
@@ -1624,6 +1648,7 @@
             var self = this;
             this._markIconsInTiles(this._style);
             this._runs = this._buildRuns(this._style);
+            this._applyHighlight();
             this._renderer.setStyle(this._style);
             if (this._worker) {
                 this._worker.postMessage({ type: 'style', style: this._style });
@@ -1773,6 +1798,7 @@
                     }
                     self._style = style;
                     self._renderer.setColorScheme(colorSchemeFunction(self.options.colorScheme));
+                    self._applyHighlight();
                     self._markIconsInTiles(style);
                     self._runs = self._buildRuns(style);
                     self._renderer.setStyle(style);
@@ -1962,6 +1988,7 @@
             this.options.colorScheme = scheme || null;
             var self = this;
             this._applyColorScheme();
+            this._applyHighlight();
             // label images, icons and the sprite with the new colors
             this._sprites = {};
             this._spriteCount = 0;
@@ -1979,6 +2006,49 @@
         },
 
         getColorScheme: function () { return this.options.colorScheme; },
+
+        /**
+         * Highlights style layers (id, ids, RegExp or function, as setLayerVisibility): the others are dimmed with a
+         * color scheme (options.dim, default 'pale'; 'grayscale', 'dark', ... or a function) and their icons fainter.
+         * highlight(null) shows all layers normally again.
+         */
+        highlight: function (layers, options) {
+            if (layers === null || layers === undefined || layers === false) {
+                this._highlight = null;
+            } else {
+                var dim = (options && options.dim) || 'pale';
+                this._highlight = { match: layers, dim: dim };
+            }
+            this._applyHighlight();
+            this._restyleColors();
+            return this;
+        },
+
+        // the highlighted style layer ids (resolved against the current style), to the renderer and the worker
+        _applyHighlight: function () {
+            var h = this._highlight, ids = null, dim = null;
+            if (h && this._style) {
+                ids = this._findLayers(h.match).map(function (l) { return l.id; });
+                dim = h.dim;
+            }
+            var set = null;
+            if (ids) { set = {}; ids.forEach(function (id) { set[id] = true; }); }
+            this._renderer.setHighlight(set, colorSchemeFunction(dim));
+            if (this._worker) {
+                this._worker.postMessage(typeof dim === 'function'
+                    ? { type: 'highlight', ids: ids, dimSource: dim.toString() }
+                    : { type: 'highlight', ids: ids, dim: dim });
+            }
+        },
+
+        // colors changed (highlight): label images and tile images again, the sprite stays
+        _restyleColors: function () {
+            this._sprites = {};
+            this._spriteCount = 0;
+            this._curvedCache = {};
+            this._styleVersion++;
+            if (this._map) this._redraw();
+        },
 
         _sendSprite: function () {
             var worker = this._worker, sprite = this._sprite;
@@ -2009,6 +2079,7 @@
 
             this._worker = worker;
             this._applyColorScheme();
+            this._applyHighlight();
 
             // the sprite (icons, patterns) before the first render job
             if (!this._sprite) return null;

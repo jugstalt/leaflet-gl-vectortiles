@@ -102,7 +102,7 @@ function styleLayer(url, responses, options = {}) {
     const layer = layerWith(responses);
     layer.options = Object.assign({ iconsInTiles: true }, options);
     layer._url = url;
-    layer._renderer = { setStyle() {}, setSprite() {}, setColorScheme() {} };
+    layer._renderer = { setStyle() {}, setSprite() {}, setColorScheme() {}, setHighlight() {} };
     layer._loadSprite = () => Promise.resolve();
     layer._startWorker = () => null;
     layer._updateAttribution = () => {};

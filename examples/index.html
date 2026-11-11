@@ -70,6 +70,13 @@
     .check { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 13px; cursor: pointer; }
     .check input { margin: 0; accent-color: var(--accent); }
     .check small { color: var(--muted); }
+    .check .hl {
+      margin-left: auto; padding: 0 6px; border: 1px solid transparent; border-radius: 6px; background: none;
+      color: var(--muted); font: inherit; font-size: 12px; line-height: 18px; cursor: pointer; opacity: .35;
+    }
+    .check:hover .hl { opacity: 1; }
+    .check .hl:hover { border-color: var(--border); }
+    .check .hl.on { opacity: 1; color: var(--accent); border-color: var(--accent); }
 
     .actions { display: flex; gap: 8px; margin-top: 12px; }
     button.primary {
@@ -262,7 +269,7 @@
       title.title = title.textContent;
       head.appendChild(title);
 
-      const checks = [];
+      const checks = [], highlights = [];
       groups.forEach((layers, name) => {
         const label = document.createElement('label'), input = document.createElement('input'), count = document.createElement('small');
         label.className = 'check';
@@ -270,7 +277,21 @@
         input.checked = layers.some(l => l.visible);
         input.addEventListener('change', () => layer.setLayerVisibility(layers.map(l => l.id), input.checked));
         count.textContent = layers.length;
-        label.append(input, ' ' + name + ' ', count);
+        // highlight: this theme as in the style, everything else of the style pale (again: all normal)
+        const hl = document.createElement('button');
+        hl.type = 'button';
+        hl.className = 'hl';
+        hl.textContent = '★';
+        hl.title = 'Highlight ' + name;
+        hl.addEventListener('click', e => {
+          e.preventDefault();
+          const on = !hl.classList.contains('on');
+          highlights.forEach(b => b.classList.remove('on'));
+          hl.classList.toggle('on', on);
+          layer.highlight(on ? layers.map(l => l.id) : null, { dim: 'pale' });
+        });
+        highlights.push(hl);
+        label.append(input, ' ' + name + ' ', count, hl);
         list.appendChild(label);
         checks.push(input);
       });

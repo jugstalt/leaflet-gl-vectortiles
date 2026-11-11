@@ -220,6 +220,20 @@ Areas the style doesn't paint show the map container: `L.glVectorTiles.schemeCol
 matching background color, e.g. `map.getContainer().style.background = …`. Other layers of the map (raster tiles,
 markers) are not changed.
 
+### Highlighting
+
+Style layers can be highlighted: they keep their colors, all other layers of the style are dimmed with a color scheme
+(default `'pale'`) and their icons get fainter. Layers are addressed as in `setLayerVisibility` (id, ids, RegExp or
+function); a color scheme set with `setColorScheme` stays, the dimming comes on top.
+
+```js
+layer.highlight(/^GEWAESSER\//);                      // water of basemap.at, the rest pale
+layer.highlight(['roads', 'bridges'], { dim: 'grayscale' });
+layer.highlight(null);                                 // all layers normal again
+```
+
+The example page has a ★ button per theme to try it.
+
 ### Smooth zooming
 
 Labels and icons are drawn on their own canvas: while the map zooms they keep their size and move with the map.
