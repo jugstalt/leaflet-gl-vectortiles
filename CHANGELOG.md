@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- TypeScript type definitions (`leaflet-gl-vectortiles.d.ts`, `types` in package.json) for the whole API: options,
+  methods, statics (`createCrs`, `decodeTile`, `schemeColor`, `mapToImage`), image options and results, events and the
+  map options `smoothWheelZoom` / `smoothWheelSpeed`. `npm test` compiles a usage file against them.
 - Web fonts: option `webfonts` (default: the style's `ol:webfonts` template, e.g. the BEV styles load Roboto; or a
   template of your own for self-hosted fonts). Labels are drawn at once with a fallback font and again when the fonts
   are loaded. Font weights from the font name as numbers (Light 300, Medium 500, Semibold 600, …).

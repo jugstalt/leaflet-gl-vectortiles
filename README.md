@@ -73,6 +73,18 @@ import '@jugstalt/leaflet-gl-vectortiles';
 
 Or copy `leaflet-gl-vectortiles.js` (one file) into your project.
 
+**TypeScript:** the package has type definitions (`leaflet-gl-vectortiles.d.ts`); they extend the types of Leaflet
+(`npm install -D @types/leaflet`) with `L.GLVectorTiles`, `L.glVectorTiles()`, its options and the map options
+`smoothWheelZoom` / `smoothWheelSpeed`. Event objects are typed as `L.GLVectorTiles.StyleLoadEvent`,
+`TileErrorEvent` and `ErrorEvent`:
+
+```ts
+layer.on('styleload', (e: L.LeafletEvent) => console.log((e as L.GLVectorTiles.StyleLoadEvent).style.name));
+```
+
+**Leaflet 2:** Leaflet 1.9 is required. Leaflet 2 (still in beta) drops `L.Layer.extend()` and the factory
+functions (`L.point()`, `L.map()`, …) in favor of ES classes; the plugin will follow when Leaflet 2 is released.
+
 ### Classic vector tiles (WebMercator)
 
 ```js
@@ -308,6 +320,7 @@ zoom (map option `smoothWheelZoom`) is off by default.
 
 ## Limits
 
+- **Leaflet:** 1.9 (not Leaflet 2, see Usage).
 - **Projection:** the map's projection must be the projection of the tiles. Tiles are not reprojected on the
   client, so WebMercator tiles can't be shown in a map in another projection.
 - **Rendering:** Canvas 2D, not WebGL. Complex styles render well, but a new zoom step takes longer to fill in than
@@ -331,7 +344,7 @@ e.g. `python -m http.server`, and open `/examples/` (`/examples/?min` uses the m
 ```bash
 npm install
 npm run build    # leaflet-gl-vectortiles.min.js and its source map
-npm test         # build, then the tests (Node's test runner, no browser needed)
+npm test         # build, the type check (tsc), then the tests (Node's test runner, no browser needed)
 ```
 
 Releases: set the version in `package.json`, a section `## <version>` in `CHANGELOG.md`, commit and push a tag
@@ -342,7 +355,8 @@ approved on npmjs.com.
 The tests (`test/`) load the plugin in Node with a minimal Leaflet stub and cover the parts that don't draw: the
 MVT decoder (with tiles encoded in the test), expressions, legacy functions and filters, source loading (TileJSON,
 ESRI, gView grids, attribution), symbol anchors, text along lines, and that the worker code is self-contained, also
-in the minified build. GitHub Actions runs them on every push.
+in the minified build. `test/types/usage.ts` uses the documented API and is compiled against the type
+definitions. GitHub Actions runs them on every push.
 
 ## License
 
