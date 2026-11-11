@@ -191,7 +191,14 @@
         <label class="check"><input id="smooth" type="checkbox" checked> Smooth wheel zoom</label>
         <label class="check"><input id="declutter" type="checkbox" checked> Declutter labels</label>
         <label class="check"><input id="lowpower" type="checkbox"> Low power <small>(economical rendering)</small></label>
-        <label class="check"><input id="gpu" type="checkbox"> GPU tile rendering <small>(Chrome/Edge: often slower)</small></label>
+        <label class="field">
+          <span>Tile rendering</span>
+          <select id="gpu">
+            <option value="auto">Auto (GPU on Safari/iOS, software elsewhere)</option>
+            <option value="gpu">GPU</option>
+            <option value="software">Software</option>
+          </select>
+        </label>
         <label class="check"><input id="debug" type="checkbox"> Show tile grid</label>
       </div>
     </details>
@@ -454,7 +461,7 @@
         debug: $('debug').checked,
         declutter: $('declutter').checked,
         lowPower: $('lowpower').checked,
-        gpuTileRendering: $('gpu').checked,
+        gpuTileRendering: { auto: 'auto', gpu: true, software: false }[$('gpu').value],
         colorScheme: currentScheme(),
         language: $('language').value || null,
         attribution: Object.entries(attributions).find(([host]) => url.includes(host))?.[1]

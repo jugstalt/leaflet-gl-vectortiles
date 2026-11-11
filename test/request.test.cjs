@@ -247,3 +247,29 @@ test('at the end of a gesture requests far from the view are aborted at once', (
     layer._requestTiles();
     assert.deepEqual(aborts(layer), ['30']);
 });
+
+test("gpuTileRendering 'auto': GPU on WebKit (Safari, iOS), software on Chromium and Firefox", () => {
+    const { prefersGpuCanvas } = plugin._internals;
+    const ua = (userAgent, maxTouchPoints = 0) => ({ userAgent, maxTouchPoints });
+    // WebKit: GPU
+    assert.equal(prefersGpuCanvas(ua('Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1')), true);
+    assert.equal(prefersGpuCanvas(ua('Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/131.0 Mobile/15E148 Safari/604.1')), true);   // Chrome on iOS is WebKit
+    assert.equal(prefersGpuCanvas(ua('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15')), true);
+    assert.equal(prefersGpuCanvas(ua('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15', 5)), true);   // iPad
+    // Chromium, Firefox: software
+    assert.equal(prefersGpuCanvas(ua('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36')), false);
+    assert.equal(prefersGpuCanvas(ua('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0')), false);
+    assert.equal(prefersGpuCanvas(ua('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36')), false);   // Chrome on a Mac
+    assert.equal(prefersGpuCanvas(ua('Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36', 5)), false);
+    assert.equal(prefersGpuCanvas(ua('Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0')), false);
+    assert.equal(prefersGpuCanvas(null), false);
+});
+
+test('gpuTileRendering: true / false force it, auto asks the browser', () => {
+    const layer = layerWith({ gpuTileRendering: true });
+    assert.equal(layer._gpuTiles(), true);
+    layer.options.gpuTileRendering = false;
+    assert.equal(layer._gpuTiles(), false);
+    layer.options.gpuTileRendering = 'auto';
+    assert.equal(layer._gpuTiles(), false);   // no navigator in the test sandbox
+});

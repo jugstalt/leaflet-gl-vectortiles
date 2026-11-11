@@ -123,8 +123,8 @@ declare module 'leaflet' {
             lowPower?: boolean;
             /** icon-only symbol layers with icon-allow-overlap drawn into the tile images (default true) */
             iconsInTiles?: boolean;
-            /** render tile images on the GPU (default false: software, faster for dense tiles in Chrome/Edge) */
-            gpuTileRendering?: boolean;
+            /** render tile images on the GPU; 'auto' (default): on WebKit (Safari, iOS) yes, on Chromium and Firefox in software */
+            gpuTileRendering?: boolean | 'auto';
             /** ms to fade in new tiles and labels; 0: no fading */
             fadeDuration?: number;
             /** rings of tiles loaded around the visible ones */

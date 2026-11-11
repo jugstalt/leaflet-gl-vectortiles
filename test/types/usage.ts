@@ -10,7 +10,7 @@ const layer: L.GLVectorTiles = L.glVectorTiles('https://example.com/styles/root.
     webfonts: true,
     lowPower: false,
     defaultStyle: true,
-    gpuTileRendering: false,
+    gpuTileRendering: 'auto',
     fetchOptions: { credentials: 'include' },
     transformRequest: (url, resourceType) => {
         if (resourceType === 'Tile' && url.startsWith('https://example.com/')) {

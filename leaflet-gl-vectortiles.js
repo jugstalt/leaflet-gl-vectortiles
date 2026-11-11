@@ -1616,6 +1616,21 @@
     // ms a running tile request may be unneeded during a gesture before it is aborted
     var ABORT_DELAY = 1000;
 
+    /**
+     * gpuTileRendering 'auto': the faster canvas for dense vector tiles. WebKit (Safari, every browser on iOS/iPadOS)
+     * draws a software canvas with CoreGraphics, slow for many overlapping paths (at a pixel ratio of 3 even more),
+     * its GPU canvas is fast. Chromium sends each drawing command of a GPU canvas to its GPU process (thousands of
+     * small paths per tile), its software rasterizer (Skia) is fast on the worker thread; Firefox: Skia as well.
+     */
+    function prefersGpuCanvas(nav) {
+        if (!nav) return false;
+        var ua = nav.userAgent || '';
+        // iOS / iPadOS (iPadOS reports itself as a Mac with touch): all browsers are WebKit
+        if (/iP(hone|ad|od)/.test(ua) || (/Macintosh/.test(ua) && nav.maxTouchPoints > 1)) return true;
+        // Safari and other WebKit browsers; Chromium and Android browsers name Chrome/Chromium/Android too
+        return /AppleWebKit/.test(ua) && !/Chrome|Chromium|Android/.test(ua);
+    }
+
     var LOW_POWER = {
         maxPixelRatio: 1,
         padding: 0,
@@ -1666,9 +1681,9 @@
             iconsInTiles: true,
             // rings of tiles loaded around the visible ones (after them), so panning finds them loaded; 0 = none
             preload: 1,
-            // render tile images on the GPU (Chrome/Edge accelerate canvases; dense vector tiles are much faster in
-            // software, on the worker thread); false: software rendering
-            gpuTileRendering: false,
+            // render tile images on the GPU: 'auto': on WebKit (Safari, iOS) yes, otherwise (Chromium, Firefox) in
+            // software on the worker thread, faster there for dense vector tiles; true / false to force it
+            gpuTileRendering: 'auto',
             // web fonts for the labels: true: the style's template (metadata 'ol:webfonts'), a template of your own
             // ("https://myserver/fonts/{font-family}/{fontweight}{-fontstyle}.css"), false: system fonts only.
             // Labels are drawn at once with a fallback font and again when the fonts are loaded
@@ -2005,6 +2020,13 @@
 
         // a failed tile is requested again (option tileRetries, after 0.5 s, 1 s, ...): servers that fail now and
         // then (e.g. two requests of the same tile at once) leave no holes. Then a tileerror event
+        // option gpuTileRendering: true / false, or 'auto' for this browser
+        _gpuTiles: function () {
+            var o = this.options.gpuTileRendering;
+            if (o === 'auto') return prefersGpuCanvas(typeof navigator !== 'undefined' ? navigator : null);
+            return !!o;
+        },
+
         _tileError: function (key, entry, error) {
             var retries = this._tileRetries[key] || 0;
             if (retries < (this.options.tileRetries || 0)) {
@@ -3335,7 +3357,7 @@
                 self._worker.postMessage({
                     type: 'render', key: key, tileKey: self._key(job.sourceId, job.d.tile), sourceId: job.sourceId,
                     zoom: job.zoom, zoomKey: job.zoomKey, w: w, h: h, view: view, layerRect: job.layerRect || null, mapZoom: job.mapZoom,
-                    from: job.from, to: job.to, gpu: !!self.options.gpuTileRendering,
+                    from: job.from, to: job.to, gpu: self._gpuTiles(),
                     d: { x0: job.d.x0, y0: job.d.y0, sx: job.d.sx, sy: job.d.sy, clip: job.d.clip }
                 });
             });
@@ -3349,7 +3371,7 @@
             var canvas = cached && cached.canvas.width === w && cached.canvas.height === h ? cached.canvas : document.createElement('canvas');
             canvas.width = w;
             canvas.height = h;
-            var c = canvas.getContext('2d', this.options.gpuTileRendering ? undefined : { willReadFrequently: true });
+            var c = canvas.getContext('2d', this._gpuTiles() ? undefined : { willReadFrequently: true });
             c.clearRect(0, 0, w, h);
             // draw in the coordinates of the map canvas, shifted to the tile
             var sx = w / d.clip[2], sy = h / d.clip[3];
@@ -4213,7 +4235,8 @@
         resolveUrl: resolveUrl, placeAlongPath: placeAlongPath, cssFont: cssFont, imageLayout: imageLayout,
         localizeTextField: localizeTextField, anchorOffset: anchorOffset, justification: justification,
         fontParts: fontParts, webfontUrl: webfontUrl, styleFonts: styleFonts, requestFor: requestFor,
-        defaultStyle: defaultStyle, isTileJson: isTileJson
+        defaultStyle: defaultStyle, isTileJson: isTileJson,
+        prefersGpuCanvas: prefersGpuCanvas
     };
 
     L.GLVectorTiles = GLVectorTiles;
