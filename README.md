@@ -58,7 +58,7 @@ From a CDN (minified build of the npm package):
 ```html
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@jugstalt/leaflet-gl-vectortiles@0.6.0/leaflet-gl-vectortiles.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@jugstalt/leaflet-gl-vectortiles@0.6.1/leaflet-gl-vectortiles.min.js"></script>
 ```
 
 With npm (`L.glVectorTiles` is added to Leaflet's `L`):

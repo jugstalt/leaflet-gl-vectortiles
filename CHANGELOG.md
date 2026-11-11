@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.0
+## 0.6.1
 
 - Fix: slow tile servers (e.g. gView rendering tiles on the fly) got the same tiles requested and aborted again and
   again while zooming back and forth, so they never finished. Running requests near the view (one ring beyond the
@@ -8,6 +8,7 @@
   1 s, at its end at once. In a test with 1.5 s per tile: about half the requests, the map complete sooner.
 - Option `tileRetries` (default 0: off): a failed tile request is repeated this often (after 0.5 s, 1 s, ...) before
   the `tileerror` event, for servers that fail now and then.
+- 0.6.0 was not published (its tag was set before the version change); 0.6.1 is that release.
 
 ## 0.5.0
 
