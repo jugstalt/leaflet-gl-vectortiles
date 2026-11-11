@@ -333,8 +333,9 @@ npm test         # build, then the tests (Node's test runner, no browser needed)
 ```
 
 Releases: set the version in `package.json`, a section `## <version>` in `CHANGELOG.md`, commit and push a tag
-`v<version>`. The workflow `.github/workflows/publish.yml` tests, publishes to npm (trusted publishing with
-provenance) and creates the GitHub release with the minified build.
+`v<version>`. The workflow `.github/workflows/publish.yml` tests, stages the version on npm (trusted publishing with
+provenance) and creates the GitHub release with the minified build. The staged version becomes public when it is
+approved on npmjs.com.
 
 The tests (`test/`) load the plugin in Node with a minimal Leaflet stub and cover the parts that don't draw: the
 MVT decoder (with tiles encoded in the test), expressions, legacy functions and filters, source loading (TileJSON,

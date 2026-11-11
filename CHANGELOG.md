@@ -20,8 +20,8 @@
   the line).
 - **Example page:** color scheme selector (with tint color), ★ button per theme to highlight it, export of the view
   as PNG, label language selector.
-- **Releases** from a pushed tag `v<version>` with GitHub Actions: tests, npm publish with provenance (trusted
-  publishing, no token or one-time password), GitHub release with the minified build.
+- **Releases** from a pushed tag `v<version>` with GitHub Actions: tests, staged npm publish with provenance (trusted
+  publishing, no token or one-time password; approved on npmjs.com), GitHub release with the minified build.
 - Fix: a symbol whose text can't be laid out (longer than its line) no longer shows its icon alone unless the text
   is optional (as GL; empty road shields in OpenFreeMap Positron).
 - Fix: the `load` event waited only for running render jobs, not for queued ones.

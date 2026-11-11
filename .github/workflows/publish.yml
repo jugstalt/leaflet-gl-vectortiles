@@ -1,8 +1,10 @@
-# Release: a pushed tag v<version> (matching package.json) is tested, published to npm and released on GitHub.
+# Release: a pushed tag v<version> (matching package.json) is tested, staged on npm and released on GitHub.
+# The staged npm version is made public by approving it on npmjs.com.
 #
 # npm: trusted publishing (OIDC), no token and no one-time password. Set up once on npmjs.com:
 #   package @jugstalt/leaflet-gl-vectortiles → Settings → Trusted Publisher → GitHub Actions:
-#   organization or user "jugstalt", repository "leaflet-gl-vectortiles", workflow filename "publish.yml".
+#   organization or user "jugstalt", repository "leaflet-gl-vectortiles", workflow filename "publish.yml";
+#   allowed actions: only staged publishing (the default; "Allow npm publish" unchecked).
 name: Publish
 
 on:
@@ -40,7 +42,9 @@ jobs:
 
       - run: npm test   # builds leaflet-gl-vectortiles.min.js and its source map
 
-      - run: npm publish --provenance --access public
+      # staged: the version is uploaded, not yet public; it is approved on npmjs.com (with 2FA) by a maintainer.
+      # So nothing reaches npm unreviewed, even if a dependency or action in this job were compromised.
+      - run: npm stage publish --provenance --access public
 
       - name: GitHub release with the notes from CHANGELOG.md and the minified build
         env:
