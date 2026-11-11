@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 
 - `gpuTileRendering: 'auto'` (new default): tile images on the GPU on WebKit (Safari, all browsers on iOS/iPadOS),
   where the software canvas is slow for dense styles such as basemap.at; in software on Chromium and Firefox as
