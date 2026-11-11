@@ -57,7 +57,7 @@ From a CDN (minified build of the npm package):
 ```html
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@jugstalt/leaflet-gl-vectortiles@0.3.1/leaflet-gl-vectortiles.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@jugstalt/leaflet-gl-vectortiles@0.4.0/leaflet-gl-vectortiles.min.js"></script>
 ```
 
 With npm (`L.glVectorTiles` is added to Leaflet's `L`):
@@ -331,6 +331,10 @@ npm install
 npm run build    # leaflet-gl-vectortiles.min.js and its source map
 npm test         # build, then the tests (Node's test runner, no browser needed)
 ```
+
+Releases: set the version in `package.json`, a section `## <version>` in `CHANGELOG.md`, commit and push a tag
+`v<version>`. The workflow `.github/workflows/publish.yml` tests, publishes to npm (trusted publishing with
+provenance) and creates the GitHub release with the minified build.
 
 The tests (`test/`) load the plugin in Node with a minimal Leaflet stub and cover the parts that don't draw: the
 MVT decoder (with tiles encoded in the test), expressions, legacy functions and filters, source loading (TileJSON,

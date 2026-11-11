@@ -1,32 +1,31 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
-- Label language: option `language` and `setLanguage()`: name fields of `text-field` (`name`, `name_en`,
-  `name:latin`, `{name}` tokens, …) prefer `name:<lang>` / `name_<lang>`, falling back to the original.
-- Style properties: `icon-text-fit` (+ padding), `text-variable-anchor` (+ `text-radial-offset`), `text-justify`,
-  `text-line-height`, `fill-/line-/circle-/text-/icon-translate`, `line-offset`, `line-pattern` (not rotated
-  along the line).
-- Fix: a symbol whose text can't be laid out (longer than its line) no longer shows its icon alone unless the text
-  is optional (as GL; empty road shields in OpenFreeMap Positron).
-
-- Images for printing: `L.glVectorTiles.mapToImage(map, options)` (all GL layers) and `layer.toImage(options)`:
+- **Color schemes:** option `colorScheme` and `setColorScheme()` at runtime: `'pale'` (background for thematic
+  data), `'grayscale'`, `'dark'` (lightness inverted, hues kept), `'contrast'` (accessibility: areas darker against
+  white, text black/white), `'colorblind'` (red-green, daltonization), `'sepia'`, `'tint:<color>'` (shades of a house
+  color) or an own function `(rgba, info) → rgba`. All colors of the style and the sprite images (icons, patterns)
+  are recolored, in the worker too; `L.glVectorTiles.schemeColor(color, scheme)` for the map container's background.
+- **Highlighting:** `highlight(layers, { dim })` keeps the colors of the given style layers and dims all others with
+  a color scheme (default `'pale'`, icons fainter); `highlight(null)` to end it. Works together with a color scheme.
+- **Images for printing:** `L.glVectorTiles.mapToImage(map, options)` (all GL layers) and `layer.toImage(options)`:
   extent + dpi → image size, extent + image size → dpi, extent + image size + dpi → scale; `scale` (default the
   map's); the extent widened to the image's aspect ratio (never distorted); labels placed for the image size, color
-  scheme and highlighting included. Option `pixelRatio` (render at a fixed pixel ratio). Example page: export as PNG.
+  scheme and highlighting included. Option `pixelRatio` (render at a fixed pixel ratio).
+- **Label language:** option `language` and `setLanguage()`: name fields of `text-field` (`name`, `name_en`,
+  `name:latin`, `{name}` tokens, …) prefer `name:<lang>` / `name_<lang>`, falling back to the original.
+- **Style properties:** `icon-text-fit` (+ padding), `text-variable-anchor` (+ `text-radial-offset`), `text-justify`,
+  `text-line-height`, `fill-/line-/circle-/text-/icon-translate`, `line-offset`, `line-pattern` (not rotated along
+  the line).
+- **Example page:** color scheme selector (with tint color), ★ button per theme to highlight it, export of the view
+  as PNG, label language selector.
+- **Releases** from a pushed tag `v<version>` with GitHub Actions: tests, npm publish with provenance (trusted
+  publishing, no token or one-time password), GitHub release with the minified build.
+- Fix: a symbol whose text can't be laid out (longer than its line) no longer shows its icon alone unless the text
+  is optional (as GL; empty road shields in OpenFreeMap Positron).
 - Fix: the `load` event waited only for running render jobs, not for queued ones.
-
-- Highlighting: `highlight(layers, { dim })` keeps the colors of the given style layers and dims all others with a
-  color scheme (default `'pale'`, icons fainter); `highlight(null)` to end it. Works together with a color scheme.
-  Example page: a ★ button per theme.
-- Fix: the color cache of a color scheme now depends on the style layer (scheme functions using `info.layer`).
-
-- Color schemes: option `colorScheme` and `setColorScheme()` at runtime: `'pale'` (background for thematic data),
-  `'grayscale'`, `'dark'` (lightness inverted, hues kept), `'contrast'` (accessibility: areas darker against white,
-  text black/white), `'colorblind'` (red-green, daltonization), `'sepia'`, `'tint:<color>'` (shades of a house
-  color) or an own function `(rgba, info) → rgba`. All colors of the
-  style and the sprite images (icons, patterns) are recolored, in the worker too; `L.glVectorTiles.schemeColor(color,
-  scheme)` for the map container's background. Example page: a color scheme selector.
+- Fix: the color cache of a color scheme depends on the style layer (scheme functions using `info.layer`).
 
 ## 0.3.1
 
