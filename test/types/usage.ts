@@ -9,6 +9,7 @@ const layer: L.GLVectorTiles = L.glVectorTiles('https://example.com/styles/root.
     language: 'de',
     webfonts: true,
     lowPower: false,
+    defaultStyle: true,
     gpuTileRendering: false,
     fetchOptions: { credentials: 'include' },
     transformRequest: (url, resourceType) => {

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A plain TileJSON instead of a style (e.g. https://gis.ktn.gv.at/osgdi/tilesets/basemap_3d.json) is drawn with a
+  schematic default style: per source layer of its `vector_layers` fill, line and circle layers (filtered by geometry
+  type) in a color of its own, fills below lines below points, labels where a name field exists (`name:de`, `name`,
+  `feat_name`, …). Option `defaultStyle` (default `true`; `false`: an error as before). Example: preset Kärnten.
 - Option `transformRequest(url, resourceType)`: URL, headers and fetch options per request (style, sources, tiles,
   sprite, web fonts), also asynchronous, e.g. for tokens of protected services that go only to their host. Called on
   the main thread; tiles are fetched in the worker with its result. With headers, the sprite image is fetched.

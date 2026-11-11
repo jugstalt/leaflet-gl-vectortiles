@@ -1376,6 +1376,71 @@
 
     var loadedFontCss = {};   // web font CSS already in the page
 
+    // ---------------------------------------------------------------- a default style for a plain TileJSON
+
+    // well distinguishable colors, one per source layer (always the same for the same TileJSON)
+    var DEFAULT_COLORS = ['#1f77b4', '#d62728', '#2ca02c', '#9467bd', '#ff7f0e', '#17becf', '#8c564b', '#e377c2',
+        '#7f7f7f', '#bcbd22', '#393b79', '#ad494a', '#637939', '#7b4173', '#e6550d', '#3182bd'];
+
+    // fields that hold a name, in this order (vector_layers[].fields)
+    var NAME_FIELDS = ['name:de', 'name_de', 'name', 'feat_name', 'bezeichnung', 'label', 'title', 'text', 'nam'];
+
+    function isTileJson(json) {
+        return !!json && !Array.isArray(json.layers) && (Array.isArray(json.tiles) || Array.isArray(json.vector_layers) || !!json.tilejson);
+    }
+
+    /**
+     * A schematic GL style for a TileJSON without a style: per source layer (vector_layers) fill, line and circle
+     * layers filtered by geometry type (vector_layers don't say which) in a color of its own, and labels where a
+     * name field exists. All fills below all lines below all points and labels. Layer ids "<source layer>/fill" etc.
+     */
+    function defaultStyle(tilejson, url) {
+        var source = { type: 'vector', tiles: tilejson.tiles || [] };
+        ['minzoom', 'maxzoom', 'bounds', 'attribution', 'scheme'].forEach(function (k) {
+            if (tilejson[k] !== undefined && tilejson[k] !== null) source[k] = tilejson[k];
+        });
+        if (!source.tiles.length && url) source = { type: 'vector', url: url };
+
+        var vectorLayers = Array.isArray(tilejson.vector_layers) ? tilejson.vector_layers : [];
+        var fills = [], lines = [], points = [], labels = [];
+        vectorLayers.forEach(function (vl, i) {
+            if (!vl || !vl.id) return;
+            var color = DEFAULT_COLORS[i % DEFAULT_COLORS.length];
+            var base = { source: 'tilejson', 'source-layer': vl.id, metadata: { 'default-style': true } };
+            if (vl.minzoom !== undefined) base.minzoom = vl.minzoom;
+            var layer = function (suffix, type, filter, paint, layout) {
+                var l = Object.assign({ id: vl.id + '/' + suffix, type: type, filter: filter }, base, { paint: paint });
+                if (layout) l.layout = layout;
+                return l;
+            };
+            fills.push(layer('fill', 'fill', ['==', '$type', 'Polygon'],
+                { 'fill-color': color, 'fill-opacity': 0.2, 'fill-outline-color': color }));
+            lines.push(layer('line', 'line', ['==', '$type', 'LineString'],
+                { 'line-color': color, 'line-width': ['interpolate', ['linear'], ['zoom'], 8, 0.6, 16, 2] },
+                { 'line-cap': 'round', 'line-join': 'round' }));
+            points.push(layer('circle', 'circle', ['==', '$type', 'Point'],
+                { 'circle-color': color, 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 2, 16, 4],
+                  'circle-stroke-color': '#ffffff', 'circle-stroke-width': 1 }));
+
+            var fields = vl.fields || {};
+            var name = NAME_FIELDS.filter(function (f) { return Object.prototype.hasOwnProperty.call(fields, f); })[0];
+            if (!name) return;
+            var text = { 'text-color': '#333333', 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 };
+            labels.push(layer('label', 'symbol', ['in', '$type', 'Point', 'Polygon'], text,
+                { 'text-field': ['get', name], 'text-font': ['Arial Regular'], 'text-size': 12, 'text-max-width': 8 }));
+            labels.push(layer('label-line', 'symbol', ['==', '$type', 'LineString'], text,
+                { 'text-field': ['get', name], 'text-font': ['Arial Regular'], 'text-size': 11, 'symbol-placement': 'line' }));
+        });
+
+        return {
+            version: 8,
+            name: tilejson.name || 'TileJSON',
+            metadata: { 'default-style': true },
+            sources: { tilejson: source },
+            layers: fills.concat(lines, points, labels)
+        };
+    }
+
     // headers (a plain object, a Headers object or [[name, value]]) as a plain object
     function plainHeaders(headers) {
         var o = {};
@@ -1618,6 +1683,8 @@
             lowPower: false,
             // fetch options, e.g. { credentials: 'include' } or { headers: { Authorization: ... } }
             fetchOptions: {},
+            // a TileJSON instead of a style: a schematic default style from its vector_layers (false: an error)
+            defaultStyle: true,
             // function (url, resourceType) per request: { url, headers, credentials, ... } (headers added to those of
             // fetchOptions), nothing for the request as it is, or a Promise of it (e.g. a token renewed first).
             // resourceType: 'Style', 'Source', 'Tile', 'SpriteJSON', 'SpriteImage', 'Font'. Called on the main thread
@@ -2001,7 +2068,7 @@
                 var direct = resolveUrl(this._url, window.location.href);
                 loading = this._fetchJson(styleUrl, 'Style').catch(function (error) {
                     return self._fetchJson(direct, 'Style').then(function (style) {
-                        if (!style || !Array.isArray(style.layers)) throw error;
+                        if (!style || (!Array.isArray(style.layers) && !(self.options.defaultStyle && isTileJson(style)))) throw error;
                         styleUrl = direct;
                         return style;
                     }, function () { throw error; });
@@ -2010,6 +2077,7 @@
 
             return loading
                 .then(function (style) {
+                    if (self.options.defaultStyle && isTileJson(style)) style = defaultStyle(style, styleUrl);
                     if (!style || !Array.isArray(style.layers)) {
                         throw new Error(style && (style.tiles || style.tilejson || style.vector_layers)
                             ? 'A TileJSON, not a GL style (no layers): ' + styleUrl
@@ -4107,7 +4175,8 @@
     GLVectorTiles._internals = {
         resolveUrl: resolveUrl, placeAlongPath: placeAlongPath, cssFont: cssFont, imageLayout: imageLayout,
         localizeTextField: localizeTextField, anchorOffset: anchorOffset, justification: justification,
-        fontParts: fontParts, webfontUrl: webfontUrl, styleFonts: styleFonts, requestFor: requestFor
+        fontParts: fontParts, webfontUrl: webfontUrl, styleFonts: styleFonts, requestFor: requestFor,
+        defaultStyle: defaultStyle, isTileJson: isTileJson
     };
 
     L.GLVectorTiles = GLVectorTiles;

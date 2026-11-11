@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { load, plain } = require('./helpers/load.cjs');
 
-const { plugin } = load();
+const { plugin, shared } = load();
 const { resolveUrl, cssFont } = plugin._internals;
 
 // a layer object without a map: _loadSource with fixed JSON answers instead of the network
@@ -153,7 +153,7 @@ test('a gView vtc base: {url}/style.json', async () => {
 test('a TileJSON instead of a style: a clear error', async () => {
     const layer = styleLayer('', { 'https://tiles.example/basemap.json': { tilejson: '2.2.0', tiles: ['x/{z}/{x}/{y}.mvt'] } },
         { style: 'https://tiles.example/basemap.json' });
-    await assert.rejects(layer._loadStyle(), /A TileJSON, not a GL style/);
+    await assert.rejects(layer._loadStyle(), /A TileJSON, not a GL style/);   // option defaultStyle: false (the stub's options)
 });
 
 test('a source that cannot be loaded: error event, the other sources are loaded', async () => {
@@ -206,4 +206,71 @@ test('image layout: too large or empty', () => {
     assert.throws(() => imageLayout([0, 0, 100000, 100000], { dpi: 300, scale: 1000 }), /too large/);
     assert.throws(() => imageLayout([0, 0, 0, 10], { dpi: 96, scale: 1000 }), /empty extent/);
     assert.throws(() => imageLayout([0, 0, 10, 10], { dpi: 96 }), /no scale/);
+});
+
+const { defaultStyle, isTileJson } = plugin._internals;
+
+const KTN = {
+    tilejson: '2.2.0', name: 'basemap Vektor Kärnten', attribution: 'KAGIS', minzoom: 8, maxzoom: 17,
+    tiles: ['https://gis.example/vtc/{z}/{x}/{y}.mvt'],
+    vector_layers: [
+        { id: 'landuse', minzoom: 8, maxzoom: 17, fields: {} },
+        { id: 'gip_l', minzoom: 8, maxzoom: 17, fields: { drawclass: 'Number', feat_name: 'String' } },
+        { id: 'poi', fields: { name: 'String', 'name:de': 'String' } }
+    ]
+};
+
+test('defaultStyle: fills below lines below points below labels, a color per source layer', () => {
+    const style = plain(defaultStyle(KTN, 'https://gis.example/basemap.json'));
+    assert.deepEqual(style.layers.map(l => l.id), [
+        'landuse/fill', 'gip_l/fill', 'poi/fill',
+        'landuse/line', 'gip_l/line', 'poi/line',
+        'landuse/circle', 'gip_l/circle', 'poi/circle',
+        'gip_l/label', 'gip_l/label-line', 'poi/label', 'poi/label-line'
+    ]);
+    assert.deepEqual(style.sources.tilejson, {
+        type: 'vector', tiles: ['https://gis.example/vtc/{z}/{x}/{y}.mvt'], minzoom: 8, maxzoom: 17, attribution: 'KAGIS'
+    });
+    const byId = Object.fromEntries(style.layers.map(l => [l.id, l]));
+    assert.equal(byId['gip_l/line']['source-layer'], 'gip_l');
+    assert.deepEqual(byId['gip_l/line'].filter, ['==', '$type', 'LineString']);
+    assert.equal(byId['gip_l/line'].paint['line-color'], byId['gip_l/fill'].paint['fill-color']);
+    assert.notEqual(byId['gip_l/line'].paint['line-color'], byId['landuse/line'].paint['line-color']);
+    assert.equal(byId['landuse/fill'].minzoom, 8);
+    assert.equal(byId['landuse/fill'].maxzoom, undefined);   // overzoomed beyond its last tiles, not hidden
+    // name fields: feat_name; name:de before name; no labels without a name field
+    assert.deepEqual(byId['gip_l/label'].layout['text-field'], ['get', 'feat_name']);
+    assert.deepEqual(byId['poi/label'].layout['text-field'], ['get', 'name:de']);
+    assert.equal(byId['gip_l/label-line'].layout['symbol-placement'], 'line');
+    assert.equal(byId['landuse/label'], undefined);
+});
+
+test('defaultStyle: the geometry type filters match the decoded features', () => {
+    const style = defaultStyle(KTN);
+    const f = type => ({ type, properties: {} });
+    const matches = (id, type) => shared.filterMatches(style.layers.find(l => l.id === id).filter, f(type), 10);
+    assert.equal(matches('gip_l/fill', 'Polygon'), true);
+    assert.equal(matches('gip_l/fill', 'LineString'), false);
+    assert.equal(matches('gip_l/circle', 'Point'), true);
+    assert.equal(matches('gip_l/label', 'Polygon'), true);
+    assert.equal(matches('gip_l/label', 'Point'), true);
+    assert.equal(matches('gip_l/label', 'LineString'), false);
+});
+
+test('isTileJson: a TileJSON, not a style', () => {
+    assert.equal(isTileJson(KTN), true);
+    assert.equal(isTileJson({ tilejson: '3.0.0' }), true);
+    assert.equal(isTileJson(STYLE), false);
+    assert.equal(isTileJson(null), false);
+});
+
+test('a TileJSON instead of a style: loaded with the default style, its tiles and attribution', async () => {
+    const url = 'https://tiles.example/basemap.json';
+    const layer = styleLayer('', { [url]: { tilejson: '2.2.0', tiles: ['x/{z}/{x}/{y}.mvt'], attribution: 'A', vector_layers: [{ id: 'roads' }] } },
+        { style: url, defaultStyle: true });
+    await layer._loadStyle();
+    assert.deepEqual(plain(layer._style.layers.map(l => l.id)), ['roads/fill', 'roads/line', 'roads/circle']);
+    assert.equal(layer._sources.tilejson.tileUrl, 'https://tiles.example/x/{z}/{x}/{y}.mvt');
+    assert.equal(layer._sourceAttributions.tilejson, 'A');
+    assert.equal(layer.events.at(-1).type, 'styleload');
 });

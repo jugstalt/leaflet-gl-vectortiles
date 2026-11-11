@@ -351,6 +351,8 @@
     liberty:  { label: 'OpenFreeMap Liberty – world (WebMercator)', urls: ['https://tiles.openfreemap.org/styles/liberty'], view: [48.2082, 16.3738, 15] },
     positron: { label: 'OpenFreeMap Positron – world (WebMercator)', urls: ['https://tiles.openfreemap.org/styles/positron'], view: [48.2082, 16.3738, 15] },
     versatiles: { label: 'VersaTiles Colorful – world (WebMercator)', urls: ['https://tiles.versatiles.org/assets/styles/colorful/style.json'], view: [48.2082, 16.3738, 16] },
+    // a plain TileJSON without a style: drawn with the schematic default style
+    kaernten: { label: 'Kärnten – TileJSON, default style (WebMercator)', urls: ['https://gis.ktn.gv.at/osgdi/tilesets/basemap_3d.json'], osm: true, view: [46.6236, 14.3075, 16] },
     // only reachable on the developer's machine:
     // gview:    { label: 'gView (local, EPSG:31256)', urls: ['https://localhost:44331/vtc/sqlite/basis-sqlite'] },
     custom:   { label: 'Custom URL…' }
@@ -397,11 +399,16 @@
     const fetchJson = async url => { const r = await fetch(url); if (!r.ok) throw new Error(r.status + ' ' + url); return r.json(); };
     const style = /\.json(\?|$)/i.test(base) ? await fetchJson(base)
       : await fetchJson(`${base}/style.json${epsgArg ? '?epsg=' + epsgArg : ''}`).catch(() => fetchJson(base));
-    if (!Array.isArray(style.layers)) throw new Error(style.tiles ? 'a TileJSON, not a GL style' : 'not a GL style');
+    // a plain TileJSON: the plugin draws it with its schematic default style (option defaultStyle)
+    const tilejson = !Array.isArray(style.layers) && (Array.isArray(style.tiles) || Array.isArray(style.vector_layers));
+    if (!Array.isArray(style.layers) && !tilejson) throw new Error('not a GL style');
     const grid = (style.metadata || {})['gview:grid'];
 
     let crs;
-    if (!grid) {
+    if (tilejson) {
+      status(`TileJSON (WebMercator) · ${(style.vector_layers || []).length} source layers · default style`);
+      crs = L.CRS.EPSG3857;
+    } else if (!grid) {
       // a classic GL style: WebMercator z/x/y tiles
       status(`GL style (WebMercator) · ${style.layers.length} style layers`);
       crs = L.CRS.EPSG3857;

@@ -99,6 +99,8 @@ declare module 'leaflet' {
             maxConcurrentRenders?: number;
             /** options for fetch, e.g. { credentials: 'include' } */
             fetchOptions?: RequestInit;
+            /** a TileJSON instead of a style: a schematic default style from its vector_layers (default true) */
+            defaultStyle?: boolean;
             /** per request (on the main thread): URL, headers, fetch options; also async (a token renewed first) */
             transformRequest?: TransformRequestFunction | null;
             /** default: the attribution of the sources */

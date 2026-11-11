@@ -16,7 +16,8 @@ levels. Protobuf and MVT are decoded in the plugin; rendering runs in a web work
 ## Features
 
 - **Sources:** `tiles` URLs, TileJSON (`url`), ESRI VectorTileServer sources, several sources per style, relative
-  URLs. 404/204 tiles count as empty. gView vector tile caches in any grid (`gview:grid` in the style).
+  URLs. 404/204 tiles count as empty. gView vector tile caches in any grid (`gview:grid` in the style). A plain
+  TileJSON without a style is drawn with a schematic default style (option `defaultStyle`).
 - **Styles:** fill (color, opacity, outline, pattern), line (width, color, opacity, dashes, join, cap, offset,
   pattern), circle, symbol (icons from the sprite, SDF icons tinted with `icon-color`, `icon-text-fit`, text with font,
   size, halo, anchor, variable anchors, offset, rotation, letter spacing, line height, justify, transform,
@@ -158,6 +159,7 @@ otherwise zooming beyond it gives no scale in Leaflet.
 | `lowPower` | `false` | economical defaults for weak clients, see [Performance](#performance) |
 | `padding` | `0.15` | the canvas reaches this part of the map size beyond each edge, so panning shows map there at once |
 | `fetchOptions` | `{}` | options for `fetch`, e.g. `{ credentials: 'include' }` or headers for authorization |
+| `defaultStyle` | `true` | a TileJSON URL instead of a style: a schematic style from its `vector_layers` (per source layer fill, line and circle in a color of its own, labels where a name field exists, layer ids `<source layer>/fill` etc.); `false`: an `error` |
 | `transformRequest` | `null` | `function (url, resourceType)` per request: URL, headers or other fetch options, see [Protected services](#protected-services) |
 | `debug` | `false` | draw the tile borders and coordinates |
 | `pane` | `'overlayPane'` | the Leaflet pane |
@@ -362,7 +364,8 @@ zoom (map option `smoothWheelZoom`) is off by default.
 ## Example
 
 `examples/index.html` ([online](https://jugstalt.github.io/leaflet-gl-vectortiles/examples/)) loads a GL style URL
-or a gView service, with presets for basemap.at, the BEV cadastre, basemap.de, OpenFreeMap and VersaTiles. For a gView service it builds the map's CRS
+or a gView service, with presets for basemap.at, the BEV cadastre, basemap.de, OpenFreeMap, VersaTiles and a plain TileJSON
+(Kärnten, default style). For a gView service it builds the map's CRS
 from the cache grid. It lists the style layers as themes to switch. Locally: serve the repository folder over HTTP,
 e.g. `python -m http.server`, and open `/examples/` (`/examples/?min` uses the minified build of `npm run build`).
 
