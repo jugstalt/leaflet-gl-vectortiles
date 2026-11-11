@@ -10,7 +10,12 @@ const layer: L.GLVectorTiles = L.glVectorTiles('https://example.com/styles/root.
     webfonts: true,
     lowPower: false,
     gpuTileRendering: false,
-    fetchOptions: { credentials: 'include' }
+    fetchOptions: { credentials: 'include' },
+    transformRequest: (url, resourceType) => {
+        if (resourceType === 'Tile' && url.startsWith('https://example.com/')) {
+            return Promise.resolve({ headers: { Authorization: 'Bearer token' } });
+        }
+    }
 }).addTo(map);
 
 layer.on('styleload', e => {

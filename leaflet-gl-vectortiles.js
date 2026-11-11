@@ -1376,6 +1376,38 @@
 
     var loadedFontCss = {};   // web font CSS already in the page
 
+    // headers (a plain object, a Headers object or [[name, value]]) as a plain object
+    function plainHeaders(headers) {
+        var o = {};
+        if (!headers) return o;
+        if (Array.isArray(headers)) headers.forEach(function (h) { o[h[0]] = h[1]; });
+        else if (typeof headers.forEach === 'function') headers.forEach(function (value, name) { o[name] = value; });
+        else Object.assign(o, headers);
+        return o;
+    }
+
+    /**
+     * Option transformRequest: the URL and fetch options of a request. transform(url, resourceType) returns
+     * { url, headers, credentials, ... } (any fetch option), nothing for the request as it is, or a Promise of it.
+     * Its headers are added to those of fetchOptions. → { url, init } or a Promise of it.
+     */
+    function requestFor(transform, url, resourceType, fetchOptions) {
+        var base = fetchOptions || {};
+        var finish = function (t) {
+            var init = Object.assign({}, base);
+            if (t) {
+                Object.keys(t).forEach(function (k) { if (k !== 'url' && k !== 'headers') init[k] = t[k]; });
+                if (t.headers || base.headers) init.headers = Object.assign(plainHeaders(base.headers), plainHeaders(t.headers));
+            } else if (base.headers) {
+                init.headers = plainHeaders(base.headers);   // a plain object: also to the worker
+            }
+            return { url: (t && t.url) || url, init: init };
+        };
+        if (!transform) return finish(null);
+        var t = transform(url, resourceType);
+        return t && typeof t.then === 'function' ? t.then(finish) : finish(t);
+    }
+
     // a name field (name, name_en, name:en, name:latin, name_int, …)
     var NAME_FIELD = /^name([:_](en|latin|int|nonlatin|local|[a-z]{2}))?$/;
 
@@ -1586,6 +1618,10 @@
             lowPower: false,
             // fetch options, e.g. { credentials: 'include' } or { headers: { Authorization: ... } }
             fetchOptions: {},
+            // function (url, resourceType) per request: { url, headers, credentials, ... } (headers added to those of
+            // fetchOptions), nothing for the request as it is, or a Promise of it (e.g. a token renewed first).
+            // resourceType: 'Style', 'Source', 'Tile', 'SpriteJSON', 'SpriteImage', 'Font'. Called on the main thread
+            transformRequest: null,
             // null: the attribution of the sources (TileJSON attribution, ESRI copyrightText)
             attribution: null,
             opacity: 1,
@@ -1911,22 +1947,35 @@
 
         // ---------------------------------------------------------------- style, sources, sprite
 
-        _fetch: function (url) {
-            return fetch(url, this.options.fetchOptions).then(function (response) {
-                if (!response.ok) throw new Error(response.status + ' ' + url);
-                return response;
+        // the URL and fetch options of a request (option transformRequest): { url, init }, or a Promise of it
+        _request: function (url, resourceType) {
+            return requestFor(this.options.transformRequest, url, resourceType, this.options.fetchOptions);
+        },
+
+        // the same, always as a Promise (also for an error thrown by transformRequest)
+        _requestAsync: function (url, resourceType) {
+            var self = this;
+            return new Promise(function (resolve) { resolve(self._request(url, resourceType)); });
+        },
+
+        _fetch: function (url, resourceType) {
+            return this._requestAsync(url, resourceType).then(function (req) {
+                return fetch(req.url, req.init).then(function (response) {
+                    if (!response.ok) throw new Error(response.status + ' ' + url);
+                    return response;
+                });
             });
         },
 
-        _fetchJson: function (url) {
+        _fetchJson: function (url, resourceType) {
             var self = this;
-            return this._fetch(url).then(function (r) { return r.text(); }).then(function (text) {
+            return this._fetch(url, resourceType).then(function (r) { return r.text(); }).then(function (text) {
                 try {
                     return JSON.parse(text);
                 } catch (e) {
                     // an ESRI service root answers HTML without f=json
                     if (url.indexOf('f=json') < 0) {
-                        return self._fetchJson(url + (url.indexOf('?') < 0 ? '?' : '&') + 'f=json');
+                        return self._fetchJson(url + (url.indexOf('?') < 0 ? '?' : '&') + 'f=json', resourceType);
                     }
                     throw new Error('No JSON: ' + url);
                 }
@@ -1945,13 +1994,13 @@
             if (this._styleObject) {
                 loading = Promise.resolve(this._styleObject);
             } else if (this.options.style) {
-                loading = this._fetchJson(styleUrl);
+                loading = this._fetchJson(styleUrl, 'Style');
             } else {
                 // a gView vtc base: {url}/style.json; otherwise the URL may be a style itself without .json at its end
                 // (e.g. https://tiles.openfreemap.org/styles/liberty)
                 var direct = resolveUrl(this._url, window.location.href);
-                loading = this._fetchJson(styleUrl).catch(function (error) {
-                    return self._fetchJson(direct).then(function (style) {
+                loading = this._fetchJson(styleUrl, 'Style').catch(function (error) {
+                    return self._fetchJson(direct, 'Style').then(function (style) {
                         if (!style || !Array.isArray(style.layers)) throw error;
                         styleUrl = direct;
                         return style;
@@ -2023,7 +2072,7 @@
 
             var resolved = source.tiles
                 ? Promise.resolve({ tiles: source.tiles.map(function (t) { return resolveUrl(t, styleUrl); }), info: source })
-                : this._fetchJson(resolveUrl(source.url, styleUrl)).then(function (info) {
+                : this._fetchJson(resolveUrl(source.url, styleUrl), 'Source').then(function (info) {
                     var base = resolveUrl(source.url, styleUrl);
                     // a service URL (ESRI VectorTileServer) is a "directory": its tiles are relative to it;
                     // a TileJSON file (…/tiles.json) is a file: its tiles are relative to its folder
@@ -2077,14 +2126,29 @@
 
             var loadOne = function (entry) {
                 var url = resolveUrl(entry.url, styleUrl), parts = url.split('?'), query = parts[1] ? '?' + parts[1] : '';
-                return self._fetchJson(parts[0] + suffix + '.json' + query)
+                return self._fetchJson(parts[0] + suffix + '.json' + query, 'SpriteJSON')
                     .then(function (index) {
-                        return new Promise(function (resolve) {
-                            var image = new Image();
-                            image.crossOrigin = 'anonymous';
-                            image.onload = function () { resolve({ id: entry.id, index: index, image: image }); };
-                            image.onerror = function () { resolve(null); };
-                            image.src = parts[0] + suffix + '.png' + query;
+                        return self._requestAsync(parts[0] + suffix + '.png' + query, 'SpriteImage').then(function (req) {
+                            // with headers: fetched (an <img> can't send them), the image from the blob
+                            var withHeaders = req.init.headers && Object.keys(req.init.headers).length > 0;
+                            var src = withHeaders
+                                ? fetch(req.url, req.init).then(function (response) {
+                                    if (!response.ok) throw new Error(response.status + ' ' + req.url);
+                                    return response.blob();
+                                }).then(function (blob) { return URL.createObjectURL(blob); })
+                                : Promise.resolve(req.url);
+                            return src.then(function (url) {
+                                return new Promise(function (resolve) {
+                                    var image = new Image();
+                                    image.crossOrigin = req.init.credentials === 'include' ? 'use-credentials' : 'anonymous';
+                                    image.onload = function () {
+                                        if (withHeaders) URL.revokeObjectURL(url);
+                                        resolve({ id: entry.id, index: index, image: image });
+                                    };
+                                    image.onerror = function () { resolve(null); };
+                                    image.src = url;
+                                });
+                            });
                         });
                     })
                     .catch(function () { return null; });   // without this sprite
@@ -2397,15 +2461,18 @@
                 var f = fontParts(name);
                 var url = resolveUrl(webfontUrl(template, f), styleUrl);
                 if (!loadedFontCss[url]) {
-                    var link = document.createElement('link');
-                    link.rel = 'stylesheet';
-                    link.href = url;
-                    link.crossOrigin = 'anonymous';
-                    document.head.appendChild(link);
-                    loadedFontCss[url] = new Promise(function (resolve) {
-                        link.onload = resolve;
-                        link.onerror = resolve;   // without this font: the fallback stays
-                    });
+                    // a <link>: transformRequest can change its URL and credentials, not send headers
+                    loadedFontCss[url] = self._requestAsync(url, 'Font').then(function (req) {
+                        return new Promise(function (resolve) {
+                            var link = document.createElement('link');
+                            link.rel = 'stylesheet';
+                            link.href = req.url;
+                            link.crossOrigin = req.init.credentials === 'include' ? 'use-credentials' : 'anonymous';
+                            link.onload = resolve;
+                            link.onerror = resolve;   // without this font: the fallback stays
+                            document.head.appendChild(link);
+                        });
+                    }).catch(function () {});
                 }
                 loads.push(loadedFontCss[url].then(function () {
                     return document.fonts.load((f.style === 'italic' ? 'italic ' : '') + f.weight + ' 16px "' + f.family + '"')
@@ -2809,13 +2876,30 @@
 
             if (this._worker) {
                 var url = this._tileUrlFor(source, job.t);
-                this._tiles[job.key] = { status: 'loading', layers: null, used: Date.now(), filtered: {}, inWorker: true, url: url };
+                var workerEntry = this._tiles[job.key] = { status: 'loading', layers: null, used: Date.now(), filtered: {}, inWorker: true, url: url };
                 this._tileOrder.push(job.key);
                 this._active++;
-                this._worker.postMessage({
-                    type: 'load', key: job.key, url: url, sourceId: job.sourceId,
-                    fetchOptions: this.options.fetchOptions
-                });
+                // transformRequest runs here (it may use the page's variables, e.g. a token), the worker only fetches
+                var send = function (req) {
+                    if (self._tiles[job.key] !== workerEntry || !self._worker) {   // aborted meanwhile (async transform)
+                        self._active--;
+                        self._pump();
+                        return;
+                    }
+                    workerEntry.url = req.url;
+                    self._worker.postMessage({ type: 'load', key: job.key, url: req.url, sourceId: job.sourceId, fetchOptions: req.init });
+                };
+                var fail = function (error) {
+                    self._active--;
+                    if (self._tiles[job.key] === workerEntry) {
+                        workerEntry.status = 'error';
+                        self._tileError(job.key, workerEntry, error);
+                    }
+                    self._pump();
+                };
+                var req;
+                try { req = this._request(url, 'Tile'); } catch (e) { fail(e); return; }
+                if (req && typeof req.then === 'function') req.then(send, fail); else send(req);
                 return;
             }
 
@@ -2824,10 +2908,13 @@
             this._tileOrder.push(job.key);
             this._active++;
 
-            var options = L.extend({}, this.options.fetchOptions);
-            if (controller) options.signal = controller.signal;
-
-            fetch(entry.url, options)
+            this._requestAsync(entry.url, 'Tile')
+                .then(function (req) {
+                    entry.url = req.url;
+                    var options = Object.assign({}, req.init);
+                    if (controller) options.signal = controller.signal;
+                    return fetch(req.url, options);
+                })
                 .then(function (r) {
                     // 204 (gView) and 404 (ESRI, outside the data) are empty tiles
                     if (r.status === 204 || r.status === 404) return new ArrayBuffer(0);
@@ -4020,7 +4107,7 @@
     GLVectorTiles._internals = {
         resolveUrl: resolveUrl, placeAlongPath: placeAlongPath, cssFont: cssFont, imageLayout: imageLayout,
         localizeTextField: localizeTextField, anchorOffset: anchorOffset, justification: justification,
-        fontParts: fontParts, webfontUrl: webfontUrl, styleFonts: styleFonts
+        fontParts: fontParts, webfontUrl: webfontUrl, styleFonts: styleFonts, requestFor: requestFor
     };
 
     L.GLVectorTiles = GLVectorTiles;

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Option `transformRequest(url, resourceType)`: URL, headers and fetch options per request (style, sources, tiles,
+  sprite, web fonts), also asynchronous, e.g. for tokens of protected services that go only to their host. Called on
+  the main thread; tiles are fetched in the worker with its result. With headers, the sprite image is fetched.
 - TypeScript type definitions (`leaflet-gl-vectortiles.d.ts`, `types` in package.json) for the whole API: options,
   methods, statics (`createCrs`, `decodeTile`, `schemeColor`, `mapToImage`), image options and results, events and the
   map options `smoothWheelZoom` / `smoothWheelSpeed`. `npm test` compiles a usage file against them.

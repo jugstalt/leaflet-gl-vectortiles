@@ -44,6 +44,16 @@ declare module 'leaflet' {
             [key: string]: unknown;
         }
 
+        type ResourceType = 'Style' | 'Source' | 'Tile' | 'SpriteJSON' | 'SpriteImage' | 'Font';
+
+        /** The result of transformRequest: another URL and/or fetch options (headers added to those of fetchOptions). */
+        interface RequestParameters extends RequestInit {
+            url?: string;
+        }
+
+        type TransformRequestFunction = (url: string, resourceType: ResourceType) =>
+            RequestParameters | null | undefined | void | Promise<RequestParameters | null | undefined | void>;
+
         /** Style layers: an id, ids, a RegExp tested on the id, or a function. */
         type LayerMatch = string | string[] | RegExp | ((styleLayer: StyleLayer) => boolean);
 
@@ -89,6 +99,8 @@ declare module 'leaflet' {
             maxConcurrentRenders?: number;
             /** options for fetch, e.g. { credentials: 'include' } */
             fetchOptions?: RequestInit;
+            /** per request (on the main thread): URL, headers, fetch options; also async (a token renewed first) */
+            transformRequest?: TransformRequestFunction | null;
             /** default: the attribution of the sources */
             attribution?: string;
             opacity?: number;

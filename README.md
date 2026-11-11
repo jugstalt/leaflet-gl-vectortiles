@@ -158,6 +158,7 @@ otherwise zooming beyond it gives no scale in Leaflet.
 | `lowPower` | `false` | economical defaults for weak clients, see [Performance](#performance) |
 | `padding` | `0.15` | the canvas reaches this part of the map size beyond each edge, so panning shows map there at once |
 | `fetchOptions` | `{}` | options for `fetch`, e.g. `{ credentials: 'include' }` or headers for authorization |
+| `transformRequest` | `null` | `function (url, resourceType)` per request: URL, headers or other fetch options, see [Protected services](#protected-services) |
 | `debug` | `false` | draw the tile borders and coordinates |
 | `pane` | `'overlayPane'` | the Leaflet pane |
 | `attribution` | `null` | `null`: the attribution of the sources (TileJSON `attribution`, ESRI `copyrightText`); basemap.at has none in its metadata, set it here |
@@ -177,6 +178,32 @@ Events:
 
 Methods: `getStyle()`, `getGrid()`, `setOpacity(opacity)`, `setZIndex(zIndex)` and the style methods below.
 Static: `L.glVectorTiles.createCrs(grid, proj4Definition, options)`, `L.glVectorTiles.decodeTile(arrayBuffer)`.
+
+### Protected services
+
+`transformRequest(url, resourceType)` is called before each request, on the main thread (so it can use the page's
+variables, e.g. the current token). It returns `{ url, headers, credentials, … }` (any `fetch` option; headers are
+added to those of `fetchOptions`), nothing for the request as it is, or a Promise of it, e.g. when a token is renewed
+first. `resourceType`: `'Style'`, `'Source'` (TileJSON, ESRI service info), `'Tile'`, `'SpriteJSON'`,
+`'SpriteImage'`, `'Font'`. Unlike `fetchOptions`, a token goes only to the hosts it is meant for:
+
+```js
+L.glVectorTiles('https://server/gview/vtc/kataster', {
+    transformRequest: function (url, resourceType) {
+        if (url.indexOf('https://server/gview/') === 0) {
+            return auth.getToken().then(function (token) {   // or synchronously: return { headers: ... }
+                return { headers: { Authorization: 'Bearer ' + token } };
+            });
+        }
+        // other hosts (OSM, web fonts, ...): unchanged
+    }
+}).addTo(map);
+```
+
+Tiles are fetched in the web worker with the URL and headers the function returned. With headers the sprite image is
+fetched (instead of an `<img>`); web font CSS is a `<link>`: its URL and credentials can be changed, no headers. The
+server must allow the headers for cross-origin requests (`Access-Control-Allow-Headers`). Images for printing use the
+same function.
 
 ### Style at runtime
 

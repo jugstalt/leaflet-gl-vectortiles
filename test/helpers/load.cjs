@@ -27,7 +27,7 @@ function load(file = 'leaflet-gl-vectortiles.js') {
     vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context, { filename: file });
     const plugin = L.GLVectorTiles;
     if (!plugin) throw new Error(file + ' did not define L.GLVectorTiles');
-    return { L, plugin, shared: plugin.shared() };
+    return { L, plugin, shared: plugin.shared(), context };
 }
 
 // values from the sandbox as plain values of this realm (deepStrictEqual compares prototypes)
