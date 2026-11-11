@@ -138,6 +138,7 @@ otherwise zooming beyond it gives no scale in Leaflet.
 | `fadeDuration` | `200` | milliseconds to fade in new tiles and labels; `0`: no fading |
 | `preload` | `1` | rings of tiles loaded around the visible ones (after them); `0`: none |
 | `iconsInTiles` | `true` | icon-only symbol layers with `icon-allow-overlap` are drawn into the tile images (much less work per frame, e.g. the footpath dots of basemap.at); they don't hide other labels then, as with `icon-ignore-placement` |
+| `pixelRatio` | `null` | render at exactly this pixel ratio (e.g. dpi / 96); `null`: the screen's (see `maxPixelRatio`) |
 | `maxPixelRatio` | `null` | render at most at this device pixel ratio, e.g. `1` on high-DPI screens; `null`: the screen's |
 | `lowPower` | `false` | economical defaults for weak clients, see [Performance](#performance) |
 | `padding` | `0.15` | the canvas reaches this part of the map size beyond each edge, so panning shows map there at once |
@@ -233,6 +234,34 @@ layer.highlight(null);                                 // all layers normal agai
 ```
 
 The example page has a ★ button per theme to try it.
+
+### Images for printing
+
+An extent as an image, rendered the same way as on screen (tiles, color scheme, highlighting), the labels placed again
+for the image size. Lines, text and icons get finer with the dpi.
+
+```js
+const result = await L.glVectorTiles.mapToImage(map, {   // all GL layers of the map (or layer.toImage(options))
+  extent: map.getBounds(),     // LatLngBounds or [minX, minY, maxX, maxY] in projection units; default: the view
+  dpi: 300,                    // and/or imageSize: [2480, 3508]
+  scale: 5000,                 // 1:5000; default: the map's scale
+  background: '#ffffff'        // default: transparent where the style paints nothing
+});
+// result: { canvas, extent, imageSize, dpi, scale, attribution, complete }
+result.canvas.toBlob(blob => { /* … */ }, 'image/png');
+```
+
+| Given | Follows |
+|---|---|
+| `extent`, `dpi` (`scale`) | the image size |
+| `extent`, `imageSize` (`scale`) | the dpi |
+| `extent`, `imageSize`, `dpi` | the scale |
+
+If the extent and the image have different aspect ratios, the extent is widened (centered) to the image's aspect
+ratio, never distorted; `result.extent` is the extent of the image. `scale` refers to projection units (for
+WebMercator: meters at the equator, not on the ground). Images up to 16384 px per side; `complete` is false when not
+all tiles were loaded within `timeout` (default 60 s). Other layers of the map (raster tiles, markers, vectors) are not
+in the image.
 
 ### Smooth zooming
 

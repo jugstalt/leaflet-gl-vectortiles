@@ -1398,6 +1398,10 @@
             // render at most at this device pixel ratio (e.g. 1 on high-DPI screens: less sharp, a fraction of
             // the pixels to render); null = the screen's ratio
             maxPixelRatio: null,
+            // render at exactly this pixel ratio (e.g. for printing: dpi / 96); null: the screen's (see maxPixelRatio)
+            pixelRatio: null,
+            // the base URL for relative URLs in a style object (default: the page)
+            styleBase: null,
             // icon layers that may overlap anything (icons only, icon-allow-overlap) are drawn into the tile
             // images: much less work per frame on dense maps; they don't hide labels then (as with
             // icon-ignore-placement)
@@ -1711,7 +1715,8 @@
 
         // 'loading' when visible tiles start to load, 'load' when all visible tiles are loaded and rendered
         _checkLoading: function (startOnly) {
-            var busy = Object.keys(this._rendering).length > 0, visible = this._visibleKeys;
+            // busy: render jobs running in the worker or still queued (sent a few at a time)
+            var busy = Object.keys(this._rendering).length > 0 || Object.keys(this._renderQueue).length > 0, visible = this._visibleKeys;
             for (var key in visible) {
                 var entry = this._tiles[key];
                 if (!entry || entry.status === 'loading') { busy = true; break; }
@@ -1769,7 +1774,8 @@
             var styleUrl = this.options.style || (this._url + '/style.json' + (epsg ? '?epsg=' + epsg : ''));
             styleUrl = resolveUrl(styleUrl, window.location.href);
             var self = this;
-            if (this._styleObject) styleUrl = window.location.href;   // relative URLs in a style object: to the page
+            // relative URLs in a style object: to its base (default the page)
+            if (this._styleObject) styleUrl = resolveUrl(this.options.styleBase || window.location.href, window.location.href);
 
             var loading;
             if (this._styleObject) {
@@ -1797,6 +1803,7 @@
                             : 'Not a GL style (no layers): ' + styleUrl);
                     }
                     self._style = style;
+                    self._styleUrl = styleUrl;   // the base of its relative URLs (see toImage)
                     self._renderer.setColorScheme(colorSchemeFunction(self.options.colorScheme));
                     self._applyHighlight();
                     self._markIconsInTiles(style);
@@ -2236,6 +2243,7 @@
 
         // device pixels per CSS pixel to render with
         _ratio: function () {
+            if (this.options.pixelRatio > 0) return this.options.pixelRatio;
             var ratio = window.devicePixelRatio || 1, max = this.options.maxPixelRatio;
             return max > 0 ? Math.min(ratio, max) : ratio;
         },
@@ -3540,13 +3548,205 @@
         });
     };
 
+    // ------------------------------------------------------------------------------------------
+    // Images of an extent (printing): rendered with a hidden map of the image's size and pixel ratio, the same way
+    // as on screen (tiles, labels placed for that size, color scheme, highlighting)
+    // ------------------------------------------------------------------------------------------
+
+    var CSS_PX_PER_METER = 96 / 0.0254;
+    var MAX_IMAGE_SIDE = 16384;
+
+    // projection units per CSS pixel of the map at its current zoom
+    function mapResolution(map) {
+        var crs = map.options.crs;
+        var factor = crs.transformation && crs.transformation._a ? Math.abs(crs.transformation._a) : 1;
+        return 1 / (crs.scale(map.getZoom()) * factor);
+    }
+
+    /**
+     * The image size, pixel ratio and extent for options { extent, imageSize, dpi, scale } (see toImage):
+     * extent [minX, minY, maxX, maxY] in projection units; resolution: projection units per CSS pixel of the map when
+     * no scale is given. The extent is widened (centered) to the image's aspect ratio, never distorted.
+     */
+    function imageLayout(extent, options, resolution) {
+        var minX = extent[0], minY = extent[1], maxX = extent[2], maxY = extent[3];
+        var w = maxX - minX, h = maxY - minY;
+        if (!(w > 0 && h > 0)) throw new Error('toImage: empty extent');
+        var size = options.imageSize, dpi = options.dpi, res;
+
+        if (size) {
+            // the extent to the image's aspect ratio
+            var aspect = size[0] / size[1], cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+            if (w / h < aspect) w = h * aspect; else h = w / aspect;
+            minX = cx - w / 2; maxX = cx + w / 2; minY = cy - h / 2; maxY = cy + h / 2;
+        }
+
+        var ratio;
+        if (size && dpi) {
+            // image size and dpi: the scale follows
+            ratio = dpi / 96;
+            res = w / (size[0] / ratio);
+        } else {
+            res = options.scale ? options.scale / CSS_PX_PER_METER : resolution;
+            if (!(res > 0)) throw new Error('toImage: no scale (and no map to take it from)');
+            var cssW = w / res, cssH = h / res;
+            if (size) {
+                ratio = size[0] / cssW;   // image size: the dpi follows
+            } else {
+                ratio = (dpi || 96) / 96;   // dpi: the image size follows
+                size = [Math.round(cssW * ratio), Math.round(cssH * ratio)];
+            }
+        }
+        if (size[0] > MAX_IMAGE_SIDE || size[1] > MAX_IMAGE_SIDE) {
+            throw new Error('toImage: ' + size[0] + ' x ' + size[1] + ' px is too large (max ' + MAX_IMAGE_SIDE + ' px per side)');
+        }
+        // the hidden map in CSS pixels (whole pixels), its pixel ratio giving the image size
+        var css = [Math.max(1, Math.round(size[0] / ratio)), Math.max(1, Math.round(size[1] / ratio))];
+        return {
+            extent: [minX, minY, maxX, maxY], imageSize: [size[0], size[1]], cssSize: css, pixelRatio: size[0] / css[0],
+            resolution: w / css[0], dpi: 96 * size[0] / css[0], scale: (w / css[0]) * CSS_PX_PER_METER
+        };
+    }
+
+    function toExtent(map, extent) {
+        var crs = map.options.crs;
+        if (!extent) extent = map.getBounds();
+        if (extent instanceof L.LatLngBounds || (Array.isArray(extent) && extent.length === 2)) {
+            var b = L.latLngBounds(extent), sw = crs.project(b.getSouthWest()), ne = crs.project(b.getNorthEast());
+            return [Math.min(sw.x, ne.x), Math.min(sw.y, ne.y), Math.max(sw.x, ne.x), Math.max(sw.y, ne.y)];
+        }
+        return extent.slice(0, 4);
+    }
+
+    // a copy of a layer for the hidden map: its current style (with runtime changes), color scheme, highlighting
+    function printCopy(layer, pixelRatio) {
+        var options = L.extend({}, layer.options, {
+            style: JSON.parse(JSON.stringify(layer._style)), styleBase: layer._styleUrl, pixelRatio: pixelRatio,
+            padding: 0, fadeDuration: 0, preload: 0, liveRedrawInterval: 0, lowPower: false, debug: false
+        });
+        var copy = new GLVectorTiles('', options);
+        if (layer._highlight) {
+            copy.once('styleload', function () { copy.highlight(layer._highlight.match, { dim: layer._highlight.dim }); });
+        }
+        return copy;
+    }
+
+    // resolves when the layer has loaded and drawn its tiles (or after the timeout: drawn as far as it got)
+    function whenDrawn(layer, timeout) {
+        return new Promise(function (resolve) {
+            var done = false, timer = null, loaded = false;
+            var finish = function (complete) {
+                if (done) return;
+                done = true;
+                clearTimeout(timer);
+                clearTimeout(limit);
+                resolve(complete);
+            };
+            var settle = function () {
+                clearTimeout(timer);
+                timer = setTimeout(function () { if (loaded && !layer._loading) finish(true); }, 300);
+            };
+            layer.on('load', function () { loaded = true; settle(); });
+            layer.on('loading', function () { clearTimeout(timer); });
+            layer.on('error', function () { settle(); });
+            var limit = setTimeout(function () { finish(false); }, timeout);
+        });
+    }
+
+    /**
+     * Renders the GL layers of a map (or the given layers) for an extent into an image.
+     *   options: extent (LatLngBounds or [minX, minY, maxX, maxY] in projection units; default the map's view),
+     *            imageSize [w, h] and/or dpi, scale (1:scale; default the map's), background (CSS color),
+     *            timeout (ms, default 60000)
+     *   → Promise { canvas, extent (widened to the image's aspect ratio), imageSize, dpi, scale, attribution,
+     *               complete (false: not all tiles loaded within the timeout) }
+     */
+    GLVectorTiles.mapToImage = function (map, options, layers) {
+        options = options || {};
+        if (!layers) {
+            layers = [];
+            map.eachLayer(function (l) { if (l instanceof GLVectorTiles && l._style) layers.push(l); });
+            // in the order of the pane (drawn on top of each other)
+            layers.sort(function (a, b) {
+                var nodes = Array.prototype.slice.call(a._canvas.parentNode.children);
+                return nodes.indexOf(a._canvas) - nodes.indexOf(b._canvas);
+            });
+        }
+        if (!layers.length) return Promise.reject(new Error('toImage: no GL vector tile layer with a loaded style'));
+
+        var layout;
+        try {
+            layout = imageLayout(toExtent(map, options.extent), options, mapResolution(map));
+        } catch (e) {
+            return Promise.reject(e);
+        }
+
+        var crs = map.options.crs;
+        var div = document.createElement('div');
+        div.style.cssText = 'position:absolute;left:-100000px;top:0;width:' + layout.cssSize[0] + 'px;height:' +
+            layout.cssSize[1] + 'px;overflow:hidden;';
+        document.body.appendChild(div);
+        var hidden = L.map(div, {
+            crs: crs, zoomControl: false, attributionControl: false, zoomAnimation: false, fadeAnimation: false,
+            markerZoomAnimation: false, inertia: false, zoomSnap: 0, minZoom: -Infinity, maxZoom: Infinity
+        });
+        var e = layout.extent;
+        var center = crs.unproject(L.point((e[0] + e[2]) / 2, (e[1] + e[3]) / 2));
+        var factor = crs.transformation && crs.transformation._a ? Math.abs(crs.transformation._a) : 1;
+        hidden.setView(center, crs.zoom(1 / (layout.resolution * factor)), { animate: false });
+
+        var copies = layers.map(function (layer) { return printCopy(layer, layout.pixelRatio); });
+        var drawn = copies.map(function (copy) { return whenDrawn(copy, options.timeout || 60000); });
+        copies.forEach(function (copy) { copy.addTo(hidden); });
+
+        return Promise.all(drawn).then(function (complete) {
+            var canvas = document.createElement('canvas');
+            canvas.width = layout.imageSize[0];
+            canvas.height = layout.imageSize[1];
+            var ctx = canvas.getContext('2d');
+            if (options.background) {
+                ctx.fillStyle = options.background;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
+            var attribution = [];
+            copies.forEach(function (copy) {
+                copy._moving = false;
+                copy._redraw();   // labels placed for this size, all tiles there
+                ctx.drawImage(copy._canvas, 0, 0, canvas.width, canvas.height);
+                ctx.drawImage(copy._labelCanvas, 0, 0, canvas.width, canvas.height);
+                var a = copy.getAttribution();
+                if (a && attribution.indexOf(a) < 0) attribution.push(a);
+            });
+            return {
+                canvas: canvas, extent: layout.extent, imageSize: layout.imageSize, dpi: layout.dpi, scale: layout.scale,
+                attribution: attribution.join(' | '), complete: complete.every(Boolean)
+            };
+        }).then(function (result) {
+            hidden.remove();
+            L.DomUtil.remove(div);
+            return result;
+        }, function (error) {
+            hidden.remove();
+            L.DomUtil.remove(div);
+            throw error;
+        });
+    };
+
+    /** This layer for an extent as an image (see GLVectorTiles.mapToImage). */
+    GLVectorTiles.prototype.toImage = function (options) {
+        if (!this._map) return Promise.reject(new Error('toImage: the layer is not on a map'));
+        return GLVectorTiles.mapToImage(this._map, options, [this]);
+    };
+
+    GLVectorTiles._internals = GLVectorTiles._internals || {};
+
     GLVectorTiles.decodeTile = decodeTile;
     /** A CSS color through a color scheme, e.g. the map container's background: schemeColor('#fff', 'dark'). */
     GLVectorTiles.schemeColor = function (color, scheme) { return schemeColor(color, colorSchemeFunction(scheme)); };
     GLVectorTiles.evaluate = evaluateValue;
     GLVectorTiles.shared = gvShared;
     // for the tests (not a public API)
-    GLVectorTiles._internals = { resolveUrl: resolveUrl, placeAlongPath: placeAlongPath, cssFont: cssFont };
+    GLVectorTiles._internals = { resolveUrl: resolveUrl, placeAlongPath: placeAlongPath, cssFont: cssFont, imageLayout: imageLayout };
 
     L.GLVectorTiles = GLVectorTiles;
     L.glVectorTiles = function (url, options) {
@@ -3555,6 +3755,7 @@
     L.glVectorTiles.createCrs = GLVectorTiles.createCrs;
     L.glVectorTiles.decodeTile = decodeTile;
     L.glVectorTiles.schemeColor = GLVectorTiles.schemeColor;
+    L.glVectorTiles.mapToImage = GLVectorTiles.mapToImage;
 
     return GLVectorTiles;
 }));

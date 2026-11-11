@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Images for printing: `L.glVectorTiles.mapToImage(map, options)` (all GL layers) and `layer.toImage(options)`:
+  extent + dpi → image size, extent + image size → dpi, extent + image size + dpi → scale; `scale` (default the
+  map's); the extent widened to the image's aspect ratio (never distorted); labels placed for the image size, color
+  scheme and highlighting included. Option `pixelRatio` (render at a fixed pixel ratio). Example page: export as PNG.
+- Fix: the `load` event waited only for running render jobs, not for queued ones.
+
 - Highlighting: `highlight(layers, { dim })` keeps the colors of the given style layers and dims all others with a
   color scheme (default `'pale'`, icons fainter); `highlight(null)` to end it. Works together with a color scheme.
   Example page: a ★ button per theme.

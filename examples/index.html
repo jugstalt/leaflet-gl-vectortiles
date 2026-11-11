@@ -184,6 +184,22 @@
       </div>
     </details>
 
+    <details id="export">
+      <summary>Export image</summary>
+      <div class="content">
+        <label class="field">
+          <span>DPI</span>
+          <input id="export-dpi" type="text" inputmode="numeric" value="150">
+        </label>
+        <label class="field">
+          <span>Scale 1: <small>(empty: the map's)</small></span>
+          <input id="export-scale" type="text" inputmode="numeric" placeholder="e.g. 5000">
+        </label>
+        <div class="actions"><button id="export-png" class="primary" type="button">Export the view as PNG</button></div>
+        <p class="hint" id="export-info"></p>
+      </div>
+    </details>
+
     <details id="gview-options">
       <summary>gView services</summary>
       <div class="content">
@@ -473,6 +489,30 @@
   applyScheme(false);
   $('scheme').addEventListener('change', () => applyScheme(true));
   $('tint').addEventListener('change', () => applyScheme(true));
+
+  // export: the current view (all GL layers) as PNG, labels placed for the image size
+  $('export-png').addEventListener('click', async () => {
+    if (!map) return;
+    const info = $('export-info');
+    info.textContent = 'rendering…';
+    try {
+      const dpi = Number($('export-dpi').value) || 96, scale = Number($('export-scale').value) || undefined;
+      const result = await L.glVectorTiles.mapToImage(map, {
+        extent: map.getBounds(), dpi, scale, background: getComputedStyle($('map')).backgroundColor
+      });
+      info.textContent = `${result.imageSize[0]} × ${result.imageSize[1]} px · ${Math.round(result.dpi)} dpi · 1:${Math.round(result.scale).toLocaleString()}` +
+        (result.complete ? '' : ' · not all tiles loaded');
+      result.canvas.toBlob(blob => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'map.png';
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      }, 'image/png');
+    } catch (e) {
+      info.textContent = 'Error: ' + e.message;
+    }
+  });
 
   function run() { load().catch(e => status('Error: ' + e.message, true)); }
   $('load').addEventListener('click', run);

@@ -154,3 +154,38 @@ test('a source that cannot be loaded: error event, the other sources are loaded'
     assert.equal(error.data.source, 'broken');
     assert.equal(layer.events.at(-1).type, 'styleload');
 });
+
+const { imageLayout } = plugin._internals;
+const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps * Math.max(1, Math.abs(b));
+
+test('image layout: extent + dpi + scale → image size', () => {
+    // 1000 m × 500 m at 1:5000 = 20 cm × 10 cm; at 300 dpi = 2362 × 1181 px
+    const l = imageLayout([0, 0, 1000, 500], { dpi: 300, scale: 5000 });
+    assert.deepEqual(plain(l.imageSize), [2362, 1181]);
+    assert.ok(near(l.dpi, 300, 1e-3) && near(l.scale, 5000, 1e-3));
+    assert.deepEqual(plain(l.extent), [0, 0, 1000, 500], 'extent unchanged');
+});
+
+test('image layout: extent + image size → dpi (at the map\'s resolution); the extent widened to the aspect ratio', () => {
+    // map: 2 m per CSS pixel; a square extent into a 2:1 image → widened in x, centered
+    const l = imageLayout([0, 0, 1000, 1000], { imageSize: [2000, 1000] }, 2);
+    assert.deepEqual(plain(l.extent), [-500, 0, 1500, 1000]);
+    assert.deepEqual(plain(l.imageSize), [2000, 1000]);
+    assert.ok(near(l.dpi, 192), '2000 px for 1000 CSS px: 192 dpi');
+    // a wide extent into a tall image → widened in y
+    const t = imageLayout([0, 0, 1000, 100], { imageSize: [500, 1000], scale: 1000 });
+    assert.deepEqual(plain(t.extent), [0, -950, 1000, 1050]);
+});
+
+test('image layout: extent + image size + dpi → scale', () => {
+    const l = imageLayout([0, 0, 2000, 1000], { imageSize: [2400, 1200], dpi: 240 });
+    // 2400 px at 240 dpi = 10 in = 25.4 cm for 2000 m → 1:7874
+    assert.ok(near(l.scale, 2000 / 0.254, 1e-3));
+    assert.deepEqual(plain(l.cssSize), [960, 480]);
+});
+
+test('image layout: too large or empty', () => {
+    assert.throws(() => imageLayout([0, 0, 100000, 100000], { dpi: 300, scale: 1000 }), /too large/);
+    assert.throws(() => imageLayout([0, 0, 0, 10], { dpi: 96, scale: 1000 }), /empty extent/);
+    assert.throws(() => imageLayout([0, 0, 10, 10], { dpi: 96 }), /no scale/);
+});
