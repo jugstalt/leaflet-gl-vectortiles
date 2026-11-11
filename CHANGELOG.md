@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
 - A plain TileJSON instead of a style (e.g. https://gis.ktn.gv.at/osgdi/tilesets/basemap_3d.json) is drawn with a
   schematic default style: per source layer of its `vector_layers` fill, line and circle layers (filtered by geometry
