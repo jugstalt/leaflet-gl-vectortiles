@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Web fonts: option `webfonts` (default: the style's `ol:webfonts` template, e.g. the BEV styles load Roboto; or a
+  template of your own for self-hosted fonts). Labels are drawn at once with a fallback font and again when the fonts
+  are loaded. Font weights from the font name as numbers (Light 300, Medium 500, Semibold 600, …).
+- The `'contrast'` scheme also in sizes: lines 30 % wider (at least +0.5 px), text and icons 15 % larger, text halos
+  at least 1.5 px. A scheme function may have a property `adjust(name, value)` for numeric paint/layout values.
+- Fix: in the `'contrast'` scheme light text with a light halo became white on white (basemap.at water labels): text
+  is now always black on a white halo.
+
 ## 0.4.0
 
 - **Color schemes:** option `colorScheme` and `setColorScheme()` at runtime: `'pale'` (background for thematic

@@ -90,11 +90,29 @@ test('gView source: its own grid, refused on a map in another projection', async
         /The map is EPSG:3857, the tile cache EPSG:31256/);
 });
 
-test('cssFont: GL font names to CSS fonts', () => {
-    assert.equal(cssFont(['Open Sans Bold'], 14), 'bold 14px "Open Sans", sans-serif');
-    assert.equal(cssFont(['Noto Sans Italic'], 12), 'italic 12px "Noto Sans", sans-serif');
-    assert.equal(cssFont(['Arial Regular'], 13.333), '13.3px "Arial", sans-serif');
-    assert.equal(cssFont(null, 10), '10px "Arial", sans-serif');
+test('cssFont: GL font names to CSS fonts (numeric weights)', () => {
+    assert.equal(cssFont(['Open Sans Bold'], 14), '700 14px "Open Sans", sans-serif');
+    assert.equal(cssFont(['Noto Sans Italic'], 12), 'italic 400 12px "Noto Sans", sans-serif');
+    assert.equal(cssFont(['Arial Regular'], 13.333), '400 13.3px "Arial", sans-serif');
+    assert.equal(cssFont(['Open Sans Semibold Italic'], 10), 'italic 600 10px "Open Sans", sans-serif');
+    assert.equal(cssFont(['Roboto Light'], 10), '300 10px "Roboto", sans-serif');
+    assert.equal(cssFont(null, 10), '400 10px "Arial", sans-serif');
+});
+
+test('web fonts: URLs from the ol:webfonts template, the fonts of a style', () => {
+    const { fontParts, webfontUrl, styleFonts } = plugin._internals;
+    const t = '../fonts/{font-family}/{fontweight}{-fontstyle}.css';
+    assert.equal(webfontUrl(t, fontParts('Roboto Bold')), '../fonts/roboto/700.css');
+    assert.equal(webfontUrl(t, fontParts(['Open Sans Semibold Italic'])), '../fonts/open-sans/600-italic.css');
+    assert.equal(resolveUrl(webfontUrl(t, fontParts('Roboto Bold')), 'https://kataster.example/styles/kataster/style_gis.json'),
+        'https://kataster.example/styles/fonts/roboto/700.css');
+    const style = { layers: [
+        { type: 'symbol', layout: { 'text-font': ['Roboto Bold'] } },
+        { type: 'symbol', layout: { 'text-font': ['step', ['zoom'], ['literal', ['Noto Sans Regular']], 10, ['literal', ['Noto Sans Bold']]] } },
+        { type: 'symbol', layout: { 'text-font': { stops: [[5, ['Open Sans Italic']]] } } },
+        { type: 'line', layout: {} }
+    ] };
+    assert.deepEqual(plain(styleFonts(style)).sort(), ['Noto Sans Bold', 'Noto Sans Regular', 'Open Sans Italic', 'Roboto Bold']);
 });
 
 // _loadStyle without a map: fixed JSON answers, the rest of the loading stubbed

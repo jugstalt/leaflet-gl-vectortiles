@@ -232,7 +232,10 @@ test('color schemes: contrast, colorblind, sepia, tint', () => {
     const pastel = parseColor(schemeColor('#e8c8c8', f('contrast'), { property: 'fill-color' }));
     assert.ok(pastel[1] < 160, 'pastel areas darker (more contrast to white roads)');
     assert.equal(schemeColor('#555555', f('contrast'), { property: 'text-color' }), 'rgba(0,0,0,1)');
-    assert.equal(schemeColor('rgba(255,255,255,0.6)', f('contrast'), { property: 'text-halo-color' }), 'rgba(255,255,255,0.9)');
+    assert.equal(schemeColor('rgba(255,255,255,0.6)', f('contrast'), { property: 'text-halo-color' }), 'rgba(255,255,255,1)');
+    // light text with a light halo (basemap.at water labels): black text on a white halo, not white on white
+    assert.equal(schemeColor('#a0c8f0', f('contrast'), { property: 'text-color' }), 'rgba(0,0,0,1)');
+    assert.equal(schemeColor('#e8f0ff', f('contrast'), { property: 'text-halo-color' }), 'rgba(255,255,255,1)');
     // colorblind: red and green farther apart in blue (what deuteranopes still see), gray untouched
     const red = parseColor(schemeColor('#ff0000', f('colorblind'))), green = parseColor(schemeColor('#00a000', f('colorblind')));
     assert.ok(red[2] - green[2] > 100, 'red gets blue, green does not');
@@ -275,4 +278,17 @@ test('a scheme function depending on the layer: cached per layer', () => {
     renderer.setColorScheme((c, info) => info.layer === 'a' ? [0, 0, 0, c[3]] : [255, 255, 255, c[3]]);
     assert.equal(renderer._paint({ id: 'a', paint: { 'fill-color': '#888' } }, 'fill-color', null, 1, null), 'rgba(0,0,0,1)');
     assert.equal(renderer._paint({ id: 'b', paint: { 'fill-color': '#888' } }, 'fill-color', null, 1, null), 'rgba(255,255,255,1)');
+});
+
+test('the contrast scheme also in sizes: wider lines, larger text, stronger halos; others only colors', () => {
+    const renderer = new shared.TileRenderer();
+    const layer = { id: 'r', paint: { 'line-width': 2, 'text-halo-width': 0.5, 'line-opacity': 0.8 }, layout: { 'text-size': 12 } };
+    renderer.setColorScheme(shared.colorSchemeFunction('contrast'));
+    assert.equal(renderer._paint(layer, 'line-width', null, 10, 1), 2.6);
+    assert.equal(renderer._paint(layer, 'text-halo-width', null, 10, 0), 1.5);
+    assert.ok(Math.abs(renderer._layout(layer, 'text-size', null, 10, 16) - 13.8) < 1e-9);
+    assert.equal(renderer._paint(layer, 'line-opacity', null, 10, 1), 0.8, 'other numbers untouched');
+    assert.equal(renderer._paint({ id: 'thin', paint: { 'line-width': 0.5 } }, 'line-width', null, 10, 1), 1, 'thin lines at least +0.5 px');
+    renderer.setColorScheme(shared.colorSchemeFunction('dark'));
+    assert.equal(renderer._paint(layer, 'line-width', null, 10, 1), 2, 'dark: sizes as styled');
 });

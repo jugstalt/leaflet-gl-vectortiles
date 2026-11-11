@@ -292,10 +292,10 @@
             // high contrast (accessibility): areas and lines darker against white, text and halos black or white
             contrast: function (c, info) {
                 var hsl = rgbToHsl(c), prop = info && info.property;
-                if (prop === 'text-color' || prop === 'text-halo-color') {
-                    var v = hsl[2] < 50 ? 0 : 255;
-                    return [v, v, v, Math.min(1, c[3] * 1.5)];
-                }
+                // text always black on a white halo: readable on any ground (deciding each color by its own lightness
+                // made light text with a light halo white on white, e.g. water labels)
+                if (prop === 'text-color') return [0, 0, 0, 1];
+                if (prop === 'text-halo-color') return [255, 255, 255, 1];
                 // white stays white, everything else darker and more saturated: light maps (white roads on pastel
                 // areas) get clearly separated areas, lines and text
                 var l = Math.pow(hsl[2] / 100, 2.2);
@@ -326,6 +326,18 @@
                     return (dark[i] + (paper[i] - dark[i]) * t) * 0.85 + c[i] * 0.15;
                 }).concat([c[3]]);
             }
+        };
+
+        // high contrast also in sizes: lines wider, text larger, halos stronger (accessibility)
+        COLOR_SCHEMES.contrast.adjust = function (name, value) {
+            switch (name) {
+                case 'line-width': return value > 0 ? Math.max(value * 1.3, value + 0.5) : value;
+                case 'text-size': return value * 1.15;
+                case 'text-halo-width': return Math.max(value * 1.5, 1.5);
+                case 'icon-size': return value * 1.15;
+                case 'circle-radius': return value * 1.2;
+            }
+            return value;
         };
 
         // 'tint:<color>': shades of one color (e.g. a house color), dark parts in the color, light parts toward white
@@ -885,11 +897,15 @@
                 }
                 // icons of layers not highlighted: fainter (the sprite is shared by all layers)
                 if (dimmed && name === 'icon-opacity') return (typeof value === 'number' ? value : 1) * 0.35;
+                // sizes through the scheme (e.g. 'contrast': wider lines, stronger halos)
+                if (this._colorFn && this._colorFn.adjust && typeof value === 'number') return this._colorFn.adjust(name, value);
                 return value;
             },
 
             _layout: function (styleLayer, name, feature, zoom, fallback) {
-                return this._value(styleLayer, 'layout', name, feature, zoom, fallback);
+                var value = this._value(styleLayer, 'layout', name, feature, zoom, fallback);
+                if (this._colorFn && this._colorFn.adjust && typeof value === 'number') return this._colorFn.adjust(name, value);
+                return value;
             },
 
             // a paint/layout value; values that don't depend on the feature (constants, zoom ramps) are evaluated once
@@ -1312,18 +1328,53 @@
     // Fonts, colors
     // ------------------------------------------------------------------------------------------
 
-    function cssFont(textFont, size) {
+    var FONT_WEIGHTS = {
+        thin: 100, hairline: 100, extralight: 200, ultralight: 200, light: 300, regular: 400, normal: 400, book: 400,
+        medium: 500, semibold: 600, demibold: 600, bold: 700, extrabold: 800, ultrabold: 800, black: 900, heavy: 900
+    };
+
+    // a GL font name ("Open Sans Semibold Italic") → { family: 'Open Sans', weight: 600, style: 'italic' }
+    function fontParts(textFont) {
         var name = (Array.isArray(textFont) ? textFont[0] : textFont) || 'Arial Regular';
-        var words = String(name).split(' '), weight = '', style = '';
+        var words = String(name).split(' '), weight = 400, style = 'normal';
         while (words.length > 1) {
             var last = words[words.length - 1].toLowerCase();
-            if (last === 'bold' || last === 'semibold' || last === 'black' || last === 'heavy') weight = 'bold ';
-            else if (last === 'italic' || last === 'oblique') style = 'italic ';
-            else if (['regular', 'normal', 'book', 'medium', 'light'].indexOf(last) < 0) break;
+            if (FONT_WEIGHTS[last]) weight = FONT_WEIGHTS[last];
+            else if (last === 'italic' || last === 'oblique') style = 'italic';
+            else break;
             words.pop();
         }
-        return style + weight + Math.round(size * 10) / 10 + 'px "' + words.join(' ') + '", sans-serif';
+        return { family: words.join(' '), weight: weight, style: style };
     }
+
+    function cssFont(textFont, size) {
+        var f = fontParts(textFont);
+        return (f.style === 'italic' ? 'italic ' : '') + f.weight + ' ' + Math.round(size * 10) / 10 + 'px "' + f.family + '", sans-serif';
+    }
+
+    // the URL of a web font's CSS from a template as in ol-mapbox-style ("…/{font-family}/{fontweight}{-fontstyle}.css")
+    function webfontUrl(template, f) {
+        return template.replace('{font-family}', f.family.toLowerCase().replace(/\s+/g, '-'))
+            .replace('{fontweight}', String(f.weight))
+            .replace('{-fontstyle}', f.style === 'italic' ? '-italic' : '');
+    }
+
+    // the font names a style uses (text-font of all symbol layers, also in expressions and functions)
+    function styleFonts(style) {
+        var fonts = {};
+        var walk = function (v) {
+            if (Array.isArray(v)) {
+                if (v.length && v.every(function (x) { return typeof x === 'string'; }) && /\s/.test(v[0])) fonts[v[0]] = true;
+                else v.forEach(walk);
+            } else if (v && typeof v === 'object') {
+                Object.keys(v).forEach(function (k) { walk(v[k]); });
+            }
+        };
+        (style.layers || []).forEach(function (l) { if (l.layout && l.layout['text-font']) walk(l.layout['text-font']); });
+        return Object.keys(fonts);
+    }
+
+    var loadedFontCss = {};   // web font CSS already in the page
 
     // a name field (name, name_en, name:en, name:latin, name_int, …)
     var NAME_FIELD = /^name([:_](en|latin|int|nonlatin|local|[a-z]{2}))?$/;
@@ -1518,6 +1569,10 @@
             // render tile images on the GPU (Chrome/Edge accelerate canvases; dense vector tiles are much faster in
             // software, on the worker thread); false: software rendering
             gpuTileRendering: false,
+            // web fonts for the labels: true: the style's template (metadata 'ol:webfonts'), a template of your own
+            // ("https://myserver/fonts/{font-family}/{fontweight}{-fontstyle}.css"), false: system fonts only.
+            // Labels are drawn at once with a fallback font and again when the fonts are loaded
+            webfonts: true,
             // labels in this language where the style has name:<lang> / name_<lang> fields (e.g. 'de'); null: as styled
             language: null,
             // colors of the style (and sprite images) through a scheme: 'pale', 'grayscale', 'dark', 'contrast',
@@ -1935,6 +1990,7 @@
                 })
                 .then(function () {
                     self._updateAttribution();
+                    self._loadWebfonts(self._style, styleUrl);
                     return self._loadSprite(self._style.sprite, styleUrl);
                 })
                 .then(function () { return self._startWorker(); })
@@ -2328,6 +2384,45 @@
                 runs.push(current);
             });
             return runs;
+        },
+
+        // web fonts: the CSS of each font the style uses (a <link> per URL, once per page), then the labels again
+        _loadWebfonts: function (style, styleUrl) {
+            var option = this.options.webfonts;
+            var template = typeof option === 'string' ? option
+                : option ? (style.metadata || {})['ol:webfonts'] : null;
+            if (!template || typeof document === 'undefined' || !document.fonts) return;
+            var self = this, loads = [];
+            styleFonts(style).forEach(function (name) {
+                var f = fontParts(name);
+                var url = resolveUrl(webfontUrl(template, f), styleUrl);
+                if (!loadedFontCss[url]) {
+                    var link = document.createElement('link');
+                    link.rel = 'stylesheet';
+                    link.href = url;
+                    link.crossOrigin = 'anonymous';
+                    document.head.appendChild(link);
+                    loadedFontCss[url] = new Promise(function (resolve) {
+                        link.onload = resolve;
+                        link.onerror = resolve;   // without this font: the fallback stays
+                    });
+                }
+                loads.push(loadedFontCss[url].then(function () {
+                    return document.fonts.load((f.style === 'italic' ? 'italic ' : '') + f.weight + ' 16px "' + f.family + '"')
+                        .catch(function () { return []; });
+                }));
+            });
+            if (!loads.length) return;
+            Promise.all(loads).then(function () {
+                if (!self._map || !self._labelCtx) return;
+                // widths and label images of the fallback font are outdated
+                self._textWidths = {};
+                self._textWidthCount = 0;
+                self._sprites = {};
+                self._spriteCount = 0;
+                self._curvedCache = {};
+                if (!self._moving) self._redraw();
+            });
         },
 
         // option language: name fields of text-field (name, name_en, name:latin, …) preferring name:<lang> /
@@ -3924,7 +4019,8 @@
     // for the tests (not a public API)
     GLVectorTiles._internals = {
         resolveUrl: resolveUrl, placeAlongPath: placeAlongPath, cssFont: cssFont, imageLayout: imageLayout,
-        localizeTextField: localizeTextField, anchorOffset: anchorOffset, justification: justification
+        localizeTextField: localizeTextField, anchorOffset: anchorOffset, justification: justification,
+        fontParts: fontParts, webfontUrl: webfontUrl, styleFonts: styleFonts
     };
 
     L.GLVectorTiles = GLVectorTiles;
